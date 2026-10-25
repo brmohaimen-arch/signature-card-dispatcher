@@ -151,10 +151,10 @@ class CardRendererTest {
 
     @Test
     void rejectsWrongAccountNumbers() {
-        for (String bad : new String[]{"001234567890", "00123456789012", "00123456789O1", ""}) {
+        for (String bad : new String[]{"10123456789012", "1012345678901234", "10123456789O123", ""}) {
             RejectedException e = assertThrows(RejectedException.class,
                     () -> render(new CardData(TestSupport.NAME, TestSupport.BRANCH, bad)));
-            assertTrue(e.getMessage().contains("13 digits"), bad);
+            assertTrue(e.getMessage().contains("15 digits"), bad);
         }
     }
 

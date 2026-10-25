@@ -98,6 +98,16 @@
   <main>
     <!-- Overview -->
     <section id="overview" class="active">
+      <div class="panel" id="endpointPanel">
+        <div class="row">
+          <h2 style="margin:0">Endpoint for the onboarding app</h2>
+          <span id="endpointState"></span>
+          <span style="flex:1"></span>
+          <button class="btn" id="endpointBtn"></button>
+          <button class="btn secondary hidden" id="endpointCancel">Cancel</button>
+        </div>
+        <div id="endpointMsg" class="msg"></div>
+      </div>
       <div class="panel"><h2>Setup</h2><div class="chips" id="setup"></div></div>
       <div class="grid" id="stats" style="margin-bottom:16px"></div>
       <div class="panel">
@@ -173,6 +183,15 @@
     <section id="config">
       <div id="cfgGroups"></div>
       <div class="panel">
+        <h2>Branch table <span class="muted">(branch code from the onboarding API → branch name printed on the card)</span></h2>
+        <p class="muted">One branch per line: <code>CODE = branch name</code>. A code missing from this table is rejected, so add every branch.</p>
+        <textarea id="branchText" dir="auto" rows="8" spellcheck="false" class="mono"
+          style="width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;line-height:1.6"
+          placeholder="LY0010002 = فرع طرابلس الرئيسي"></textarea>
+        <div class="row" style="margin-top:10px"><button class="btn" id="branchSave">Save branch table</button><span class="muted" id="branchCount"></span></div>
+        <div id="branchMsg" class="msg"></div>
+      </div>
+      <div class="panel">
         <h2>Passwords and keys</h2>
         <p class="muted" id="secretsNote"></p>
         <div class="form" id="secretFields"></div>
@@ -201,7 +220,7 @@ const el = (tag, attrs = {}, ...kids) => {
   return e;
 };
 const badgeClass = (s) => ({ QUEUED: "info", EXISTS: "info", DELIVERED: "ok", PENDING: "warn", FAILED: "bad",
-  REJECTED: "bad", SUSPICIOUS: "bad", UNAVAILABLE: "warn", NOT_CONFIGURED: "warn", NONE: "" }[s] || "");
+  REJECTED: "bad", SUSPICIOUS: "bad", UNAVAILABLE: "warn", NOT_CONFIGURED: "warn", DISABLED: "warn", NONE: "" }[s] || "");
 const badge = (s) => s ? el("span", { class: "badge " + badgeClass(s) }, s) : "";
 const time = (iso) => iso ? new Date(iso).toLocaleString() : "";
 const short = (s, n = 8) => s ? s.slice(0, n) + "…" : "";
@@ -250,7 +269,8 @@ async function loadOverview() {
   $("templateId").textContent = "template " + body.templateId;
   const names = { onboardingApi: "Onboarding API", t24Sftp: "T24 SFTP host", t24HostKey: "T24 SFTP key pinned",
     sourceSftp: "Onboarding SFTP + paths", sourceHostKey: "Onboarding SFTP key pinned",
-    quarantineKey: "Quarantine key", secretsStore: "Secrets store" };
+    quarantineKey: "Quarantine key", branchTable: "Branch table", secretsStore: "Secrets store" };
+  renderEndpoint(body.endpointEnabled);
   $("setup").replaceChildren(...Object.entries(names).map(([k, n]) =>
     el("span", { class: "chip " + (body.setup[k] ? "ok" : "warn") }, (body.setup[k] ? "✓ " : "✗ ") + n)));
   const t = body.requestsToday;
@@ -366,6 +386,7 @@ function showTest(status, body) {
 // ---- configuration ----
 let cfgOriginal = {};
 async function loadConfig() {
+  loadBranches();
   const { status, body } = await apiJson("/admin/api/config");
   if (status !== 200) return;
   cfgOriginal = {};
@@ -443,6 +464,54 @@ $("qkGen").addEventListener("click", async () => {
   const { status, body } = await apiJson("/admin/api/quarantine-key", { method: "POST", body: JSON.stringify({ replace }) });
   showMsg($("cfgMsg"), body.message, status === 200 ? "ok" : "bad");
   loadConfig();
+});
+
+// ---- endpoint switch ----
+let endpointOn = true;
+function renderEndpoint(on) {
+  endpointOn = on;
+  if ($("endpointBtn").dataset.armed) return; // don't undo an armed "Yes, disable" while refreshing
+  $("endpointState").replaceChildren(el("span", { class: "badge " + (on ? "ok" : "bad") },
+    on ? "● Accepting requests" : "● Disabled — the app gets 503 DISABLED"));
+  $("endpointBtn").textContent = on ? "Disable endpoint" : "Enable endpoint";
+}
+function disarmEndpoint() { $("endpointBtn").dataset.armed = ""; $("endpointCancel").classList.add("hidden"); renderEndpoint(endpointOn); }
+$("endpointCancel").addEventListener("click", disarmEndpoint);
+$("endpointBtn").addEventListener("click", async () => {
+  if (endpointOn && !$("endpointBtn").dataset.armed) { // two-step: disabling stops the onboarding app's requests
+    $("endpointBtn").dataset.armed = "1";
+    $("endpointBtn").textContent = "Yes, disable (app requests will be refused)";
+    $("endpointCancel").classList.remove("hidden");
+    return;
+  }
+  const enable = !endpointOn;
+  $("endpointBtn").dataset.armed = ""; $("endpointCancel").classList.add("hidden");
+  const { status, body } = await apiJson("/admin/api/endpoint", { method: "POST", body: JSON.stringify({ enabled: enable }) });
+  showMsg($("endpointMsg"), body.message, status === 200 ? (enable ? "ok" : "warn") : "bad");
+  loadOverview();
+});
+
+// ---- branch table ----
+async function loadBranches() {
+  const { status, body } = await apiJson("/admin/api/branches");
+  if (status !== 200) return;
+  const lines = Object.entries(body.branches).map(([code, name]) => code + " = " + name);
+  $("branchText").value = lines.join("\n");
+  $("branchCount").textContent = lines.length + " branch(es) · " + body.file;
+}
+$("branchSave").addEventListener("click", async () => {
+  const branches = {};
+  const bad = [];
+  $("branchText").value.split(/\r?\n/).forEach((line, i) => {
+    if (!line.trim()) return;
+    const eq = line.indexOf("=");
+    if (eq < 1) { bad.push(i + 1); return; }
+    branches[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
+  });
+  if (bad.length) { showMsg($("branchMsg"), "lines without CODE = name: " + bad.join(", "), "bad"); return; }
+  const { status, body } = await apiJson("/admin/api/branches", { method: "PUT", body: JSON.stringify({ branches }) });
+  showMsg($("branchMsg"), body.message, status === 200 ? "ok" : "bad");
+  if (status === 200) loadBranches();
 });
 
 // ---- start ----

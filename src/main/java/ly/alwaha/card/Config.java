@@ -39,12 +39,15 @@ public record Config(
         Server server) {
 
     /**
-     * The two onboarding API lookups: identity → account number, then CIF (first cifDigits of the account) → name + branch.
+     * The onboarding API lookup: identity → account details (account number, name, branch code).
+     * Optional get-CIF call (off by default): CIF = first cifDigits of the account; name + branch then come from it.
+     * The branch code is turned into the branch name with the branch table (config/branches.properties).
      * Response fields are picked with JSON pointers so they can follow the real response shape without code changes.
      */
     public record Api(
             String baseUrl,
             String accountPath,
+            boolean cifEnabled,
             String cifPath,
             String accountNumberPointer,
             String fullNamePointer,
@@ -52,7 +55,8 @@ public record Config(
             int cifDigits,
             String authHeader,
             String authValue,
-            int timeoutSeconds) {}
+            int timeoutSeconds,
+            Map<String, String> branches) {}
 
     /** Checked from the file size and image header before any pixels are decoded. */
     public record ImageLimits(long maxBytes, int maxSide, long maxPixels) {}
@@ -72,20 +76,23 @@ public record Config(
         }
     }
 
-    /** Our endpoint for the onboarding app (internal network, no key). */
-    public record Server(String bind, int port) {}
+    /** Our endpoint for the onboarding app (internal network, no key). enabled=false: requests get 503 DISABLED. */
+    public record Server(String bind, int port, boolean enabled) {}
 
     /** Built-in values for settings missing from the file (the dashboard shows these as the values in effect). */
     public static final Map<String, String> DEFAULTS = Map.ofEntries(
             Map.entry("api.base.url", ""),
             Map.entry("api.account.path", "/irf-itss-container/api/v1.0.0/holdings/customer/account/details/{nationalId}/{passportNumber}/{phoneNumber}"),
+            Map.entry("api.cif.enabled", "false"),
             Map.entry("api.cif.path", ""),
-            Map.entry("api.account.number.pointer", "/body/0/accountId"),
-            Map.entry("api.cif.name.pointer", "/body/0/customerName"),
-            Map.entry("api.cif.branch.pointer", "/body/0/branchName"),
+            Map.entry("api.account.number.pointer", "/body/0/accountNumber"),
+            Map.entry("api.name.pointer", "/body/0/accountName"),
+            Map.entry("api.branch.pointer", "/body/0/branch"),
             Map.entry("api.cif.digits", "7"),
             Map.entry("api.auth.header", ""),
-            Map.entry("api.timeout.seconds", "20"),
+            Map.entry("api.timeout.seconds", "45"),
+            Map.entry("branches.file", "config/branches.properties"),
+            Map.entry("endpoint.enabled", "true"),
             Map.entry("image.max.bytes", "15000000"),
             Map.entry("image.max.side", "10000"),
             Map.entry("image.max.pixels", "50000000"),
@@ -134,14 +141,16 @@ public record Config(
         Api api = new Api(
                 p.getProperty("api.base.url").trim(),
                 p.getProperty("api.account.path").trim(),
+                bool(p, "api.cif.enabled"),
                 p.getProperty("api.cif.path").trim(),
                 p.getProperty("api.account.number.pointer").trim(),
-                p.getProperty("api.cif.name.pointer").trim(),
-                p.getProperty("api.cif.branch.pointer").trim(),
+                p.getProperty("api.name.pointer").trim(),
+                p.getProperty("api.branch.pointer").trim(),
                 Integer.parseInt(p.getProperty("api.cif.digits")),
                 p.getProperty("api.auth.header").trim(),
                 secrets.get("API_AUTH_VALUE"),
-                Integer.parseInt(p.getProperty("api.timeout.seconds")));
+                Integer.parseInt(p.getProperty("api.timeout.seconds")),
+                loadBranches(Path.of(p.getProperty("branches.file").trim())));
         ImageLimits limits = new ImageLimits(
                 Long.parseLong(p.getProperty("image.max.bytes")),
                 Integer.parseInt(p.getProperty("image.max.side")),
@@ -183,7 +192,26 @@ public record Config(
                 secrets.get("QUARANTINE_KEY"),
                 source,
                 new Server(p.getProperty("server.bind").trim(),
-                        Integer.parseInt(p.getProperty("server.port"))));
+                        Integer.parseInt(p.getProperty("server.port")),
+                        bool(p, "endpoint.enabled")));
+    }
+
+    private static boolean bool(Properties p, String key) {
+        String v = p.getProperty(key).trim();
+        if (!v.equals("true") && !v.equals("false")) throw new IllegalArgumentException(key + " must be true or false");
+        return Boolean.parseBoolean(v);
+    }
+
+    /** code=name lines (UTF-8), edited from the dashboard. A missing file means an empty table. */
+    public static Map<String, String> loadBranches(Path file) throws IOException {
+        if (!Files.exists(file)) return Map.of();
+        Properties b = new Properties();
+        try (Reader r = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
+            b.load(r);
+        }
+        Map<String, String> out = new java.util.TreeMap<>();
+        for (String code : b.stringPropertyNames()) out.put(code.strip(), b.getProperty(code).strip());
+        return Map.copyOf(out);
     }
 
     /** The T24 document repository, from the sftp.* settings. */

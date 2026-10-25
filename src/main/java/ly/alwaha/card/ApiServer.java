@@ -119,6 +119,12 @@ public final class ApiServer implements AutoCloseable {
         Service.Components c;
         synchronized (service.lock()) {
             c = service.current();
+            if (!c.cfg().server().enabled()) {
+                // Switched off from the dashboard: refuse new work, store nothing, so the same UUID works later.
+                reply(ex, c.cfg(), entry(requestId.toString(), 503, "DISABLED", null,
+                        "temporarily disabled by the administrator; retry later with the same requestId", null), false);
+                return;
+            }
             Optional<RequestStore.Entry> prior = c.store().get(requestId);
             if (prior.isPresent()) {
                 entry = prior.get();

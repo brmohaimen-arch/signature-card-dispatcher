@@ -58,11 +58,12 @@ public final class AdminApi {
     public static final List<Field> FIELDS = List.of(
             new Field("api.base.url", "Onboarding API (account + CIF lookup)", "Base URL (e.g. http://host:port)", false),
             new Field("api.account.path", "Onboarding API (account + CIF lookup)", "Account details path", false),
-            new Field("api.cif.path", "Onboarding API (account + CIF lookup)", "Get CIF path ({cif} = first 7 digits)", false),
-            new Field("api.cif.digits", "Onboarding API (account + CIF lookup)", "CIF digits", false),
             new Field("api.account.number.pointer", "Onboarding API (account + CIF lookup)", "Account number field (JSON pointer)", false),
-            new Field("api.cif.name.pointer", "Onboarding API (account + CIF lookup)", "Customer name field (JSON pointer)", false),
-            new Field("api.cif.branch.pointer", "Onboarding API (account + CIF lookup)", "Branch field (JSON pointer)", false),
+            new Field("api.name.pointer", "Onboarding API (account + CIF lookup)", "Customer name field (JSON pointer; Arabic part is used)", false),
+            new Field("api.branch.pointer", "Onboarding API (account + CIF lookup)", "Branch code field (JSON pointer)", false),
+            new Field("api.cif.enabled", "Onboarding API (account + CIF lookup)", "Use get CIF for name + branch (true / false)", false),
+            new Field("api.cif.path", "Onboarding API (account + CIF lookup)", "Get CIF path ({cif} = first 7 digits), only if enabled", false),
+            new Field("api.cif.digits", "Onboarding API (account + CIF lookup)", "CIF digits", false),
             new Field("api.auth.header", "Onboarding API (account + CIF lookup)", "Auth header name (empty = none)", false),
             new Field("api.timeout.seconds", "Onboarding API (account + CIF lookup)", "Timeout (seconds)", false),
             new Field("sftp.host", "T24 SFTP", "Host / IP", false),
@@ -182,6 +183,9 @@ public final class AdminApi {
         else if (p.equals("/api/config") && m.equals("GET")) config(ex);
         else if (p.equals("/api/config") && m.equals("PUT")) saveConfig(ex);
         else if (p.equals("/api/quarantine-key") && m.equals("POST")) quarantineKey(ex);
+        else if (p.equals("/api/endpoint") && m.equals("POST")) endpointSwitch(ex);
+        else if (p.equals("/api/branches") && m.equals("GET")) branches(ex);
+        else if (p.equals("/api/branches") && m.equals("PUT")) saveBranches(ex);
         else if (p.equals("/api/check") && m.equals("POST")) check(ex);
         else if (p.equals("/api/hostkey/fetch") && m.equals("POST")) hostKey(ex, false);
         else if (p.equals("/api/hostkey/pin") && m.equals("POST")) hostKey(ex, true);
@@ -245,6 +249,7 @@ public final class AdminApi {
         Config cfg = c.cfg();
         ObjectNode out = JSON.createObjectNode();
         out.put("templateId", c.renderer().layout().templateId());
+        out.put("endpointEnabled", cfg.server().enabled());
         ObjectNode setup = out.putObject("setup");
         setup.put("onboardingApi", c.lookup().configured());
         setup.put("t24Sftp", !cfg.sftpHost().isEmpty());
@@ -252,6 +257,7 @@ public final class AdminApi {
         setup.put("sourceSftp", cfg.source().configured());
         setup.put("sourceHostKey", Files.isRegularFile(cfg.source().sftp().knownHosts()));
         setup.put("quarantineKey", c.quarantine() != null);
+        setup.put("branchTable", !cfg.api().branches().isEmpty());
         setup.put("secretsStore", secrets.storeAvailable());
         ObjectNode counts = out.putObject("counts");
         counts.put("queued", count(cfg.outbox(), ".jpg"));
@@ -495,6 +501,61 @@ public final class AdminApi {
         service.reload();
         service.current().audit().log("SECRETS_CHANGED", null, "by=admin names=QUARANTINE_KEY action=generated");
         json(ex, 200, msg("quarantine key generated and applied"));
+    }
+
+    // ---- endpoint switch and branch table -------------------------------------------------------------------------
+
+    /** Turns OUR endpoint on or off (saved in application.properties, so it survives a restart). */
+    private void endpointSwitch(HttpExchange ex) throws IOException {
+        JsonNode v = body(ex).path("enabled");
+        if (!v.isBoolean()) throw new IllegalArgumentException("enabled must be true or false");
+        PropertiesFile.update(service.configFile(), Map.of("endpoint.enabled", Boolean.toString(v.asBoolean())));
+        service.reload();
+        service.current().audit().log(v.asBoolean() ? "ENDPOINT_ENABLED" : "ENDPOINT_DISABLED", null, "by=admin");
+        json(ex, 200, msg(v.asBoolean() ? "endpoint enabled: requests are accepted"
+                : "endpoint disabled: requests get 503 DISABLED; queued cards are still delivered"));
+    }
+
+    private Path branchesFile() throws IOException {
+        Properties p = PropertiesFile.read(service.configFile());
+        return Path.of(p.getProperty("branches.file", Config.DEFAULTS.get("branches.file")).strip());
+    }
+
+    private void branches(HttpExchange ex) throws IOException {
+        ObjectNode out = JSON.createObjectNode();
+        ObjectNode table = out.putObject("branches");
+        service.current().cfg().api().branches().forEach(table::put);
+        out.put("file", branchesFile().toString());
+        json(ex, 200, out);
+    }
+
+    /** Replaces the whole branch-code → branch-name table (previous file backed up). */
+    private void saveBranches(HttpExchange ex) throws IOException {
+        Map<String, String> table = new TreeMap<>();
+        body(ex).path("branches").fields().forEachRemaining(e -> {
+            String code = e.getKey().strip(), name = e.getValue().asText("").strip();
+            if (!code.matches("[A-Za-z0-9_-]{1,30}")) throw new IllegalArgumentException("bad branch code: " + code);
+            if (name.isEmpty() || name.contains("\n") || name.contains("\r") || name.length() > 100) {
+                throw new IllegalArgumentException("branch " + code + " needs a name (one line, up to 100 characters)");
+            }
+            table.put(code, name);
+        });
+        Path file = branchesFile();
+        Path parent = file.toAbsolutePath().getParent();
+        Files.createDirectories(parent);
+        if (Files.exists(file)) {
+            Path backups = Files.createDirectories(parent.resolve("backups"));
+            String stamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS"));
+            Files.copy(file, backups.resolve("branches-" + stamp + ".properties"));
+        }
+        Properties out = new Properties();
+        out.putAll(table);
+        java.io.StringWriter w = new java.io.StringWriter();
+        out.store(w, "Branch code = branch name (edited from the dashboard)");
+        Generator.writeAtomically(file, w.toString().getBytes(StandardCharsets.UTF_8));
+        service.reload();
+        service.current().audit().log("BRANCHES_CHANGED", null, "by=admin count=" + table.size());
+        json(ex, 200, msg("branch table saved (" + table.size() + " branches) and applied"));
     }
 
     // ---- connection checks and host keys -----------------------------------------------------------------------------

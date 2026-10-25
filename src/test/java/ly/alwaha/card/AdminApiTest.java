@@ -74,6 +74,7 @@ class AdminApiTest {
                 "sftp.user=t24",
                 "sftp.remote.dir=repo",
                 "sftp.known.hosts=" + fwd(configDir.resolve("known_hosts")),
+                "branches.file=" + fwd(configDir.resolve("branches.properties")),
                 "source.selfie.path=",
                 "source.signature.path=",
                 "server.bind=127.0.0.1",
@@ -223,6 +224,39 @@ class AdminApiTest {
         assertTrue(body(call("GET", "/admin/api/overview", null)).path("setup").path("quarantineKey").asBoolean());
         assertEquals(409, call("POST", "/admin/api/quarantine-key", "{}").statusCode());
         assertEquals(200, call("POST", "/admin/api/quarantine-key", "{\"replace\":true}").statusCode());
+    }
+
+    // ---- endpoint switch + branch table -------------------------------------------------------------------------
+
+    @Test
+    void endpointCanBeSwitchedOffAndOnAndItSurvivesARestart() throws Exception {
+        login();
+        assertTrue(body(call("GET", "/admin/api/overview", null)).path("endpointEnabled").asBoolean());
+        assertEquals(200, call("POST", "/admin/api/endpoint", "{\"enabled\":false}").statusCode());
+        assertFalse(service.current().cfg().server().enabled(), "applied live");
+        assertTrue(Files.readString(configFile).contains("endpoint.enabled=false"), "saved, so a restart keeps it off");
+        assertFalse(body(call("GET", "/admin/api/overview", null)).path("endpointEnabled").asBoolean());
+        assertEquals(200, call("POST", "/admin/api/endpoint", "{\"enabled\":true}").statusCode());
+        assertTrue(service.current().cfg().server().enabled());
+        assertEquals(400, call("POST", "/admin/api/endpoint", "{\"enabled\":\"maybe\"}").statusCode());
+        String log = Files.readString(service.current().cfg().archive().resolve("dispatch.log"));
+        assertTrue(log.contains("ENDPOINT_DISABLED") && log.contains("ENDPOINT_ENABLED"));
+    }
+
+    @Test
+    void branchTableIsSavedWithArabicNamesAndApplied() throws Exception {
+        login();
+        String arabic = "فرع طرابلس الرئيسي";
+        HttpResponse<byte[]> r = call("PUT", "/admin/api/branches",
+                "{\"branches\":{\"LY0010002\":\"" + arabic + "\",\"LY0010003\":\"فرع بنغازي\"}}");
+        assertEquals(200, r.statusCode(), new String(r.body(), StandardCharsets.UTF_8));
+        assertEquals(arabic, service.current().cfg().api().branches().get("LY0010002"), "applied live");
+        JsonNode got = body(call("GET", "/admin/api/branches", null));
+        assertEquals(arabic, got.path("branches").path("LY0010002").asText());
+        assertEquals(2, got.path("branches").size());
+        assertEquals(400, call("PUT", "/admin/api/branches", "{\"branches\":{\"bad code!\":\"x\"}}").statusCode());
+        assertEquals(400, call("PUT", "/admin/api/branches", "{\"branches\":{\"LY1\":\"\"}}").statusCode());
+        assertEquals(2, service.current().cfg().api().branches().size(), "a bad save changes nothing");
     }
 
     // ---- archive ------------------------------------------------------------------------------------------------

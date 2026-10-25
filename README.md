@@ -6,9 +6,9 @@ Scope (Head of IT, 15 Oct 2026): image processing + SFTP dispatch only. There is
 
 ## What it puts on the card
 - ✓ in **Individual**
-- Customer **full name** in ACC Name and in all 4 name fields
-- **Branch**
-- **13-digit account number**, one digit per printed box (the digit count comes from the template's box count in `layout.json`)
+- Customer **full name**, the **Arabic part** of the API's name field, in ACC Name and in all 4 name fields
+- **Branch name**, looked up from the API's branch code in the dashboard's branch table
+- **15-digit account number**, one digit per box (15 boxes redrawn in the form's style; the digit count comes from `layout.json`)
 - **Selfie** in the photo area (scaled to fill, centre-cropped, rounded corners)
 - **Signature** in all 4 signature boxes (scaled to fit, never stretched or cropped; grey paper becomes white, ink untouched)
 - Authorized Signature / Signed in presence of are left blank
@@ -40,8 +40,8 @@ X-Request-Id: <uuid>                      (or "requestId" in the body; both acce
 {"nationalId": "...", "passportNumber": "...", "phoneNumber": "..."}
 ```
 What happens:
-1. account API → account number
-2. first 7 digits → get CIF → name and branch
+1. account API → account number, name (Arabic part kept), branch code → branch name from the table
+2. (only if `api.cif.enabled=true`) first 7 digits → get CIF → name and branch from there instead
 3. read the selfie and signature from the onboarding SFTP. Read only: **their files are never deleted**.
 4. metadata first → base64 → size check
 5. suspicious → encrypt our copy into quarantine and delete our copy
@@ -52,7 +52,7 @@ What happens:
 | `202 QUEUED` | card made, waiting for delivery | yes |
 | `200 EXISTS` | this account already has a card; its result is returned (`originalRequestId`) | yes |
 | `422 REJECTED` / `422 SUSPICIOUS` | can't make a card (reason given) | yes |
-| `503 UNAVAILABLE` / `503 NOT_CONFIGURED` | temporary; retry with the **same** UUID | no |
+| `503 UNAVAILABLE` / `503 NOT_CONFIGURED` / `503 DISABLED` | temporary (or switched off in the dashboard); retry with the **same** UUID | no |
 | `400` | missing or invalid UUID, or a bad body | no |
 
 **Idempotent:** the same UUID always gets the same stored answer (`Idempotent-Replay: true`), and nothing runs twice.
@@ -70,11 +70,11 @@ What happens:
 
 | Tab | What it does |
 |---|---|
-| **Overview** | Setup checklist; counters (queued, archived, failed, quarantined, today's results); live audit events every 5 s; **Test** buttons for the onboarding API, T24 SFTP and onboarding SFTP |
+| **Overview** | **Endpoint on/off switch** (off = the app gets `503 DISABLED`; queued cards are still delivered; survives a restart); setup checklist; counters (queued, archived, failed, quarantined, today's results); live audit events every 5 s; **Test** buttons for the onboarding API, T24 SFTP and onboarding SFTP |
 | **Requests** | Recent requests by UUID with status and delivery; click one for the full record and the card |
 | **Archive** | Every archived card (one per account): view, download, or **export selected / all as a ZIP** with `manifest.csv` (account, request UUID, SHA-256, template, date) |
 | **Test** | Sends a test request through the real endpoint and follows it until delivered |
-| **Configuration** | Every setting with the value in effect; **Save & apply** with no restart (except listen address/port) and a backup in `config/backups/`; **Fetch host key → Pin** (two-step confirm) for both SFTP servers; passwords entered here are stored encrypted, shown only as set/not set, and can never be read back; quarantine key **Generate** |
+| **Configuration** | Every setting with the value in effect; **Save & apply** with no restart (except listen address/port) and a backup in `config/backups/`; **Fetch host key → Pin** (two-step confirm) for both SFTP servers; passwords entered here are stored encrypted, shown only as set/not set, and can never be read back; quarantine key **Generate**; **branch table** (`CODE = branch name`, one per line) |
 
 Security:
 - 30-minute idle sessions, an HttpOnly + SameSite=Strict cookie, and a 5-minute lockout after 5 wrong passwords.
@@ -118,8 +118,11 @@ A folder is picked up once its files have been unchanged for `input.stable.secon
 ## Where the card text comes from (the onboarding API, not T24)
 T24 is only the SFTP document repository the finished card is delivered to. The customer lookup goes to the **onboarding API**:
 
-1. **Account details:** `GET {api.base.url}/irf-itss-container/api/v1.0.0/holdings/customer/account/details/{nationalId}/{passportNumber}/{phoneNumber}` returns the **account number**.
-2. **Get CIF** (`getItssCIFDetails`, ST.API.ITSS.CUSTOMER.1.0.0): the **first 7 digits** of the account number are the CIF. `GET {api.base.url}/irf-itss-container/api/v1.0.0/holdings/customer/accountId/getCIF/{cif}` returns the **customer name and branch**.
+1. **Account details:** `GET {api.base.url}/irf-itss-container/api/v1.0.0/holdings/customer/account/details/{nationalId}/{passportNumber}/{phoneNumber}` returns everything the card needs, read with JSON pointers matched to the real response:
+   - `body[0].accountNumber`: the **15-digit** account number
+   - `body[0].accountName`: English and Arabic name together; **only the Arabic words go on the card**
+   - `body[0].branch`: a **branch code**, turned into the branch **name** with the branch table (Configuration tab → Branch table). **Unknown codes are rejected** with a reason naming the code.
+2. **Get CIF** (`getItssCIFDetails`): **off by default** (`api.cif.enabled=false`). When switched on, the first 7 digits of the account number (the CIF) are used to fetch the name and branch from get CIF instead.
 
 Server: set `api.base.url` (in the dashboard or `application.properties`); it is on the bank network only.
 
@@ -172,11 +175,11 @@ java -jar target/signature-card-dispatcher.jar decrypt-quarantine work/quarantin
 ## The official template
 `templates/BM-AC008-2026/template.png` is built from the bank's scanned PDF, which is **not in this repository** (it's kept by the bank team):
 ```
-python tools/prepare_template.py <path-to>/BM-AC008-2026.pdf
+python tools/prepare_template.py <path-to>/BM-AC008-2026.pdf --account-boxes 15 --layout templates/BM-AC008-2026/layout.json
 ```
 The script turns the sideways scan upright (A5, 1748x2480 at 300 DPI), removes the scanner line on the left edge and the paper noise, and clears specks inside the signature boxes.
 
-**Account digits:** the printed form has **13** boxes, and the card uses them unchanged (decided 15 Oct). Hamdi's email said 14. If the bank later confirms 14, `--account-boxes 14` redraws 14 boxes in the same space, and `layout.json` then needs 14 boxes. No code change is needed.
+**Account digits:** the printed form has 13 boxes, but real account numbers have **15 digits**. The template is built with `--account-boxes 15 --layout templates/BM-AC008-2026/layout.json`: the 13 printed boxes are replaced by 15 in the same space and style, and the positions are written into `layout.json`. The service requires exactly as many digits as there are boxes.
 
 Field positions in `layout.json` were measured from the scan. To check them after any change:
 ```

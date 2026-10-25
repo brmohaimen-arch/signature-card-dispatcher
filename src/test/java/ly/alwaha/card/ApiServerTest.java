@@ -67,7 +67,7 @@ class ApiServerTest {
         Files.writeString(knownHosts, "[127.0.0.1]:" + sshd.getPort() + " " + PublicKeyEntry.toString(hostKey.getPublic()) + "\n");
 
         onboardingApi = new StubOnboardingApi();
-        onboardingApi.byNationalId.put(TestSupport.NID, new StubOnboardingApi.Customer(TestSupport.ACCOUNT, TestSupport.NAME, TestSupport.BRANCH));
+        onboardingApi.byNationalId.put(TestSupport.NID, new StubOnboardingApi.Customer(TestSupport.ACCOUNT, TestSupport.NAME, TestSupport.BRANCH_CODE));
 
         Config base = TestSupport.config(tmp, TestSupport.templateDir(tmp), "127.0.0.1", sshd.getPort(), knownHosts, "repo", onboardingApi.config());
         Config.Source source = new Config.Source(
@@ -238,6 +238,24 @@ class ApiServerTest {
     }
 
     // ---- failures ---------------------------------------------------------------------------------------------
+
+    @Test
+    void disabledEndpointAnswers503AndStoresNothing() throws Exception {
+        Config.Server off = new Config.Server(cfg.server().bind(), cfg.server().port(), false);
+        Config c = cfg;
+        startApi(new Config(c.workDir(), c.templateDir(), c.fontRegular(), c.fontBold(), c.pollSeconds(), c.stableSeconds(),
+                c.maxAttempts(), c.jpegQuality(), c.allowPlaceholderTemplate(), c.sftpHost(), c.sftpPort(), c.sftpUser(),
+                c.sftpRemoteDir(), c.sftpKnownHosts(), c.sftpKeyPath(), c.sftpPassword(), c.sftpKeyPassphrase(),
+                c.sftpTimeoutSeconds(), c.api(), c.limits(), c.quarantineKey(), c.source(), off));
+        String uuid = UUID.randomUUID().toString();
+
+        HttpResponse<String> r = submit(uuid);
+
+        assertEquals(503, r.statusCode());
+        assertEquals("DISABLED", body(r).get("status").asText());
+        assertTrue(onboardingApi.requests.isEmpty(), "nothing processed");
+        assertEquals(404, get(uuid).statusCode(), "not stored: the same UUID works once re-enabled");
+    }
 
     @Test
     void notConfiguredSourceAnswers503AndIsNotStored() throws Exception {

@@ -13,10 +13,11 @@ import java.util.regex.Pattern;
 
 /**
  * Builds the card text from the onboarding API:
- *   1. account details by national ID + passport + phone  → account number
- *   2. CIF = the first 7 digits of the account number     → full name + branch
- * Permanent problems (customer not found, missing field) throw RejectedException.
- * Temporary ones (timeout, 5xx) throw IOException, so the input stays in inbox/ and is retried next cycle.
+ *   1. account details by national ID + passport + phone  → account number, name, branch code
+ *   2. (only if api.cif.enabled) CIF = first 7 digits → name + branch from get CIF instead
+ * The card gets the ARABIC part of the name, and the branch NAME looked up from the branch code in the branch table.
+ * Permanent problems (customer not found, missing field, unknown branch code) throw RejectedException.
+ * Temporary ones (timeout, 5xx) throw IOException, so the request can be retried.
  * Identity values are never logged.
  */
 public final class CustomerLookup {
@@ -26,6 +27,8 @@ public final class CustomerLookup {
 
     // Path segments: letters, digits and a leading + for phones. Nothing that could change the URL.
     private static final Pattern SEGMENT = Pattern.compile("\\+?[A-Za-z0-9]{1,40}");
+    // A word with at least one Arabic letter (Arabic, Arabic Supplement, presentation forms).
+    private static final Pattern ARABIC = Pattern.compile("[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]");
 
     private final Config.Api api;
     private final HttpClient http;
@@ -36,30 +39,48 @@ public final class CustomerLookup {
         this.http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(api.timeoutSeconds())).build();
     }
 
-    /** Base URL and both paths are set. Until then the endpoint answers "not configured". */
+    /** Base URL and the account path are set (and the CIF path, if CIF is switched on). */
     public boolean configured() {
-        return !api.baseUrl().isEmpty() && !api.accountPath().isEmpty() && !api.cifPath().isEmpty();
+        return !api.baseUrl().isEmpty() && !api.accountPath().isEmpty() && (!api.cifEnabled() || !api.cifPath().isEmpty());
     }
 
     public CardData lookup(Identity id) throws IOException, RejectedException {
-        if (!configured()) throw new IOException("onboarding API is not configured (api.base.url / api.cif.path)");
+        if (!configured()) throw new IOException("onboarding API is not configured (api.base.url / api.account.path)");
         JsonNode account = get("account details", accountPath(id));
         String accountNumber = field(account, api.accountNumberPointer(), "account number");
         if (!accountNumber.matches("\\d+") || accountNumber.length() < api.cifDigits()) {
             throw new RejectedException("account number from the onboarding API is not numeric or shorter than " + api.cifDigits() + " digits");
         }
-
-        String cif = accountNumber.substring(0, api.cifDigits());
-        JsonNode customer = get("get CIF", api.cifPath().replace("{cif}", cif));
+        JsonNode details = api.cifEnabled()
+                ? get("get CIF", api.cifPath().replace("{cif}", accountNumber.substring(0, api.cifDigits())))
+                : account;
         return new CardData(
-                field(customer, api.fullNamePointer(), "customer name"),
-                field(customer, api.branchPointer(), "branch"),
+                arabicPart(field(details, api.fullNamePointer(), "customer name")),
+                branchName(field(details, api.branchPointer(), "branch")),
                 accountNumber);
     }
 
+    /** Only the Arabic words, in their original order: "MOHAMED ALI محمد علي" → "محمد علي". */
+    static String arabicPart(String name) throws RejectedException {
+        StringBuilder out = new StringBuilder();
+        for (String word : name.strip().split("\\s+")) {
+            if (ARABIC.matcher(word).find()) out.append(out.length() == 0 ? "" : " ").append(word);
+        }
+        if (out.length() == 0) throw new RejectedException("customer name from the onboarding API has no Arabic part");
+        return out.toString();
+    }
+
+    private String branchName(String code) throws RejectedException {
+        String name = api.branches().get(code.strip());
+        if (name == null || name.isBlank()) {
+            throw new RejectedException("branch code " + code.strip() + " is not in the branch table (add it in the dashboard)");
+        }
+        return name;
+    }
+
     /**
-     * For check-api: prints both raw responses and what each JSON pointer picks out,
-     * so the pointers in application.properties can be set from the real response. Use a TEST customer only.
+     * For check-api: prints the raw responses and what each JSON pointer picks out (plus the Arabic name and
+     * the branch-table result), so the settings can be matched to the real response. Use a TEST customer only.
      */
     public String probe(Identity id) throws IOException {
         StringBuilder r = new StringBuilder();
@@ -67,16 +88,24 @@ public final class CustomerLookup {
             JsonNode account = get("account details", accountPath(id));
             r.append("account details response:\n").append(json.writerWithDefaultPrettyPrinter().writeValueAsString(account)).append('\n');
             String accountNumber = field(account, api.accountNumberPointer(), "account number");
-            r.append("  ").append(api.accountNumberPointer()).append(" -> ").append(accountNumber).append('\n');
-            String cif = accountNumber.substring(0, Math.min(api.cifDigits(), accountNumber.length()));
-            JsonNode customer = get("get CIF", api.cifPath().replace("{cif}", cif));
-            r.append("\nget CIF (").append(cif).append(") response:\n")
-                    .append(json.writerWithDefaultPrettyPrinter().writeValueAsString(customer)).append('\n');
-            r.append("  ").append(api.fullNamePointer()).append(" -> ").append(field(customer, api.fullNamePointer(), "customer name")).append('\n');
-            r.append("  ").append(api.branchPointer()).append(" -> ").append(field(customer, api.branchPointer(), "branch")).append('\n');
-            r.append("\nOK: all pointers matched");
+            r.append("  ").append(api.accountNumberPointer()).append(" -> ").append(accountNumber)
+                    .append(" (").append(accountNumber.length()).append(" digits)\n");
+            JsonNode details = account;
+            if (api.cifEnabled()) {
+                String cif = accountNumber.substring(0, Math.min(api.cifDigits(), accountNumber.length()));
+                details = get("get CIF", api.cifPath().replace("{cif}", cif));
+                r.append("\nget CIF (").append(cif).append(") response:\n")
+                        .append(json.writerWithDefaultPrettyPrinter().writeValueAsString(details)).append('\n');
+            }
+            String name = field(details, api.fullNamePointer(), "customer name");
+            r.append("  ").append(api.fullNamePointer()).append(" -> ").append(name).append('\n');
+            r.append("     Arabic part for the card -> ").append(arabicPart(name)).append('\n');
+            String code = field(details, api.branchPointer(), "branch");
+            r.append("  ").append(api.branchPointer()).append(" -> ").append(code).append('\n');
+            r.append("     branch table -> ").append(branchName(code)).append('\n');
+            r.append("\nOK: all fields matched");
         } catch (RejectedException e) {
-            r.append("\nSTOPPED: ").append(e.getMessage()).append("\n-> adjust the pointer in application.properties to match the response above");
+            r.append("\nSTOPPED: ").append(e.getMessage()).append("\n-> adjust the setting to match the response above");
         }
         return r.toString();
     }

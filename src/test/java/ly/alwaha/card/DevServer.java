@@ -43,7 +43,7 @@ public final class DevServer {
         sshd.start();
 
         StubOnboardingApi onboardingApi = new StubOnboardingApi();
-        onboardingApi.byNationalId.put(TestSupport.NID, new StubOnboardingApi.Customer(TestSupport.ACCOUNT, TestSupport.NAME, TestSupport.BRANCH));
+        onboardingApi.byNationalId.put(TestSupport.NID, new StubOnboardingApi.Customer(TestSupport.ACCOUNT, TestSupport.NAME, TestSupport.BRANCH_CODE));
 
         Path configDir = Files.createDirectories(tmp.resolve("config"));
         Path configFile = configDir.resolve("application.properties");
@@ -57,6 +57,7 @@ public final class DevServer {
                 "poll.seconds=3",
                 "api.base.url=" + onboardingApi.baseUrl(),
                 "api.cif.path=" + StubOnboardingApi.CIF_PATH + "{cif}",
+                "branches.file=" + configDir.toString().replace('\\', '/') + "/branches.properties",
                 "sftp.host=127.0.0.1",
                 "sftp.port=" + sshd.getPort(),
                 "sftp.user=t24",

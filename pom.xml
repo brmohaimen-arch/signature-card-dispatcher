@@ -70,6 +70,10 @@
       <plugin>
         <artifactId>maven-surefire-plugin</artifactId>
         <version>3.2.5</version>
+        <configuration>
+          <!-- Fixed heap so a busy machine can't starve the test JVM. -->
+          <argLine>-Xms128m -Xmx768m</argLine>
+        </configuration>
       </plugin>
       <!-- One runnable jar: java -jar signature-card-dispatcher.jar <command> -->
       <plugin>

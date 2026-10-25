@@ -20,7 +20,8 @@ final class TestSupport {
 
     static final String NAME = "محمد علي عبدالله الورفلي";
     static final String BRANCH = "فرع طرابلس الرئيسي";
-    static final String ACCOUNT = "0012345678901";
+    static final String ACCOUNT = "101234567890123"; // 15 digits; first 7 = CIF
+    static final String BRANCH_CODE = "LY0010002";
     static final String NID = "119900112233";
     static final String PASSPORT = "PA1234567";
     static final String PHONE = "0912345678";
@@ -109,6 +110,6 @@ final class TestSupport {
                 host, port, "t24", remoteDir, knownHosts, null, "secret", null, 10,
                 api, new Config.ImageLimits(5_000_000, 10_000, 50_000_000), QUARANTINE_KEY,
                 new Config.Source(new Config.SftpEndpoint("", 22, "", "", knownHosts, null, null, null, 10), "", ""),
-                new Config.Server("127.0.0.1", 0));
+                new Config.Server("127.0.0.1", 0, true));
     }
 }

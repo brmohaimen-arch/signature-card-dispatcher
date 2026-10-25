@@ -56,7 +56,7 @@ class EndToEndSftpTest {
 
         onboardingApi = new StubOnboardingApi();
         onboardingApi.byNationalId.put(TestSupport.NID,
-                new StubOnboardingApi.Customer(TestSupport.ACCOUNT, TestSupport.NAME, TestSupport.BRANCH));
+                new StubOnboardingApi.Customer(TestSupport.ACCOUNT, TestSupport.NAME, TestSupport.BRANCH_CODE));
     }
 
     @AfterEach
@@ -107,15 +107,28 @@ class EndToEndSftpTest {
     }
 
     @Test
-    void cifIsTheFirstSevenDigitsOfTheAccountNumber() throws Exception {
+    void nameAndBranchComeFromTheOneAccountDetailsCall() throws Exception {
         Config cfg = cfg(sshd.getPort(), knownHosts);
         TestSupport.writeInputSet(cfg.inbox(), "ONB-0001", TestSupport.NID);
 
         cycle(cfg);
 
+        assertEquals(1, onboardingApi.requests.size(), "get CIF is off: one call only");
         assertTrue(onboardingApi.requests.get(0).endsWith("/" + TestSupport.NID + "/" + TestSupport.PASSPORT + "/" + TestSupport.PHONE),
                 "account call carries nationalId/passport/phone in that order");
-        assertEquals(StubOnboardingApi.CIF_PATH + TestSupport.ACCOUNT.substring(0, 7), onboardingApi.requests.get(1));
+        assertTrue(Files.exists(remoteRoot.resolve(TestSupport.ACCOUNT + ".jpg")), "15-digit card delivered");
+    }
+
+    @Test
+    void unknownBranchCodeIsRejected() throws Exception {
+        onboardingApi.byNationalId.put("120000000002", new StubOnboardingApi.Customer(TestSupport.ACCOUNT, TestSupport.NAME, "LY9999999"));
+        Config cfg = cfg(sshd.getPort(), knownHosts);
+        TestSupport.writeInputSet(cfg.inbox(), "ONB-BRANCH", "120000000002");
+
+        cycle(cfg);
+
+        assertTrue(Files.readString(failedReason(cfg)).contains("branch code LY9999999 is not in the branch table"));
+        assertEquals(0, count(remoteRoot));
     }
 
     @Test
@@ -170,13 +183,13 @@ class EndToEndSftpTest {
 
     @Test
     void accountNumberWithWrongDigitCountIsRejected() throws Exception {
-        onboardingApi.byNationalId.put("120000000001", new StubOnboardingApi.Customer("1234567", TestSupport.NAME, TestSupport.BRANCH));
+        onboardingApi.byNationalId.put("120000000001", new StubOnboardingApi.Customer("1234567", TestSupport.NAME, TestSupport.BRANCH_CODE));
         Config cfg = cfg(sshd.getPort(), knownHosts);
         TestSupport.writeInputSet(cfg.inbox(), "ONB-SHORT", "120000000001");
 
         cycle(cfg);
 
-        assertTrue(Files.readString(failedReason(cfg)).contains("13 digits"));
+        assertTrue(Files.readString(failedReason(cfg)).contains("15 digits"));
         assertEquals(0, count(remoteRoot));
     }
 
@@ -293,7 +306,7 @@ class EndToEndSftpTest {
         byte[] delivered = Files.readAllBytes(remoteRoot.resolve(TestSupport.ACCOUNT + ".jpg"));
 
         // Same account, but the CIF now answers with a different name.
-        onboardingApi.byNationalId.put(TestSupport.NID, new StubOnboardingApi.Customer(TestSupport.ACCOUNT, "أحمد سالم", TestSupport.BRANCH));
+        onboardingApi.byNationalId.put(TestSupport.NID, new StubOnboardingApi.Customer(TestSupport.ACCOUNT, "أحمد سالم", TestSupport.BRANCH_CODE));
         TestSupport.writeInputSet(cfg.inbox(), "ONB-0002", TestSupport.NID);
         cycle(cfg);
 
