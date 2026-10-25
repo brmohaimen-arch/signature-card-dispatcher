@@ -1,0 +1,191 @@
+{
+  "templateId": "BM-AC008-2026",
+  "width": 1748,
+  "height": 2480,
+  "dpi": 300,
+  "photo": {
+    "x": 150,
+    "y": 416,
+    "w": 378,
+    "h": 494
+  },
+  "photoCornerRadius": 48,
+  "individualCheckbox": {
+    "x": 1273,
+    "y": 406,
+    "w": 69,
+    "h": 71
+  },
+  "accountName": {
+    "x": 560,
+    "y": 540,
+    "w": 852,
+    "h": 84,
+    "maxFontPx": 54,
+    "minFontPx": 28,
+    "align": "right"
+  },
+  "accountNumberBoxes": [
+    {
+      "x": 560,
+      "y": 665,
+      "w": 60,
+      "h": 72
+    },
+    {
+      "x": 626,
+      "y": 665,
+      "w": 60,
+      "h": 72
+    },
+    {
+      "x": 692,
+      "y": 665,
+      "w": 60,
+      "h": 72
+    },
+    {
+      "x": 759,
+      "y": 665,
+      "w": 60,
+      "h": 72
+    },
+    {
+      "x": 825,
+      "y": 665,
+      "w": 60,
+      "h": 72
+    },
+    {
+      "x": 891,
+      "y": 665,
+      "w": 60,
+      "h": 72
+    },
+    {
+      "x": 958,
+      "y": 665,
+      "w": 60,
+      "h": 72
+    },
+    {
+      "x": 1024,
+      "y": 665,
+      "w": 60,
+      "h": 72
+    },
+    {
+      "x": 1090,
+      "y": 665,
+      "w": 60,
+      "h": 72
+    },
+    {
+      "x": 1156,
+      "y": 665,
+      "w": 60,
+      "h": 72
+    },
+    {
+      "x": 1222,
+      "y": 665,
+      "w": 60,
+      "h": 72
+    },
+    {
+      "x": 1289,
+      "y": 665,
+      "w": 60,
+      "h": 72
+    },
+    {
+      "x": 1355,
+      "y": 665,
+      "w": 60,
+      "h": 72
+    }
+  ],
+  "branch": {
+    "x": 564,
+    "y": 776,
+    "w": 852,
+    "h": 96,
+    "maxFontPx": 54,
+    "minFontPx": 28,
+    "align": "right"
+  },
+  "signatureSlots": [
+    {
+      "fullName": {
+        "x": 153,
+        "y": 950,
+        "w": 543,
+        "h": 85,
+        "maxFontPx": 48,
+        "minFontPx": 24,
+        "align": "right"
+      },
+      "signature": {
+        "x": 152,
+        "y": 1052,
+        "w": 547,
+        "h": 376
+      },
+      "signaturePadding": 18
+    },
+    {
+      "fullName": {
+        "x": 920,
+        "y": 949,
+        "w": 545,
+        "h": 85,
+        "maxFontPx": 48,
+        "minFontPx": 24,
+        "align": "right"
+      },
+      "signature": {
+        "x": 920,
+        "y": 1049,
+        "w": 546,
+        "h": 377
+      },
+      "signaturePadding": 18
+    },
+    {
+      "fullName": {
+        "x": 154,
+        "y": 1525,
+        "w": 543,
+        "h": 85,
+        "maxFontPx": 48,
+        "minFontPx": 24,
+        "align": "right"
+      },
+      "signature": {
+        "x": 153,
+        "y": 1626,
+        "w": 547,
+        "h": 377
+      },
+      "signaturePadding": 18
+    },
+    {
+      "fullName": {
+        "x": 923,
+        "y": 1525,
+        "w": 545,
+        "h": 85,
+        "maxFontPx": 48,
+        "minFontPx": 24,
+        "align": "right"
+      },
+      "signature": {
+        "x": 921,
+        "y": 1626,
+        "w": 547,
+        "h": 376
+      },
+      "signaturePadding": 18
+    }
+  ]
+}

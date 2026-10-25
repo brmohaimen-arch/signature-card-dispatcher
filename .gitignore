@@ -1,0 +1,16 @@
+# Build output (also holds the local demo password)
+target/
+
+# Runtime data: customer cards, requests, logs, quarantine
+work/
+
+# Secrets and server-specific files: never commit
+config/secrets.enc
+config/backups/
+config/known_hosts
+config/source_known_hosts
+config/.validate-*
+*.enc
+*.pem
+*.key
+id_*

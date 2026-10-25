@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Signature Card Dispatcher</title>
+<style>
+  /* Bank colours: white, dark blue, orange. Always light. */
+  :root {
+    --bg: #f5f7fa; --panel: #ffffff; --text: #0b2545; --muted: #5d6b7e; --line: #e2e7ee;
+    --navy: #0b2545; --navy-2: #13315c; --on-navy: #ffffff; --on-navy-muted: #b8c4d6;
+    --accent: #f39200; --accent-hover: #d98200; --accent-text: #0b2545; --accent-soft: #fff4e2;
+    --ok: #17703f; --ok-bg: #e4f4ea; --bad: #b3261e; --bad-bg: #fbe7e5;
+    --warn: #8a5300; --warn-bg: #fff1d9; --info: #13315c; --info-bg: #e7eef8; --code: #f1f4f8;
+    color-scheme: light;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); }
+  header { display: flex; align-items: center; gap: 16px; padding: 14px 24px; background: var(--navy); color: var(--on-navy); flex-wrap: wrap; border-bottom: 3px solid var(--accent); }
+  header h1 { font-size: 17px; margin: 0; letter-spacing: .2px; }
+  header .muted { font-size: 12px; color: var(--on-navy-muted); }
+  header .spacer { flex: 1; }
+  header button.btn.secondary { color: var(--on-navy); border-color: rgba(255,255,255,.55); }
+  header button.btn.secondary:hover { background: rgba(255,255,255,.1); }
+  nav { display: flex; gap: 4px; padding: 0 24px; background: var(--panel); border-bottom: 1px solid var(--line); overflow-x: auto; }
+  nav button { background: none; border: 0; border-bottom: 3px solid transparent; padding: 12px 14px; color: var(--muted); cursor: pointer; font: inherit; white-space: nowrap; }
+  nav button:hover { color: var(--navy); }
+  nav button.active { color: var(--navy); border-bottom-color: var(--accent); font-weight: 700; }
+  main { padding: 24px; max-width: 1280px; margin: 0 auto; }
+  section { display: none; } section.active { display: block; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin-bottom: 16px; box-shadow: 0 1px 2px rgba(11,37,69,.04); }
+  .panel h2 { font-size: 15px; margin: 0 0 12px; color: var(--navy); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 10px; padding: 12px 14px; }
+  .stat .n { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--navy); }
+  .stat .l { color: var(--muted); font-size: 12px; }
+  .muted { color: var(--muted); }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip, .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .ok { background: var(--ok-bg); color: var(--ok); } .bad { background: var(--bad-bg); color: var(--bad); }
+  .warn { background: var(--warn-bg); color: var(--warn); } .info { background: var(--info-bg); color: var(--info); }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  tr.click { cursor: pointer; } tr.click:hover td { background: var(--code); }
+  .table-wrap { overflow-x: auto; }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; }
+  .log { max-height: 420px; overflow: auto; background: var(--navy); color: #dfe7f2; border-radius: 8px; padding: 10px 12px; margin: 0; white-space: pre-wrap; word-break: break-all; }
+  .btn { display: inline-block; } button.btn, a.btn { background: var(--accent); color: var(--accent-text); border: 1px solid var(--accent); border-radius: 8px; padding: 8px 16px; font: inherit; font-weight: 700; cursor: pointer; text-decoration: none; }
+  button.btn:hover, a.btn:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+  button.btn.secondary, a.btn.secondary { background: transparent; color: var(--navy); border: 1px solid var(--navy); }
+  button.btn.secondary:hover, a.btn.secondary:hover { background: var(--accent-soft); }
+  button.btn:disabled { opacity: .5; cursor: default; }
+  input[type=text], input[type=password], input[type=search] { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); font: inherit; }
+  input:focus, button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  th { background: var(--code); }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .form { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px 16px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .msg { margin-top: 10px; padding: 8px 10px; border-radius: 6px; display: none; }
+  .msg.show { display: block; }
+  .detail { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+  @media (max-width: 800px) { .detail { grid-template-columns: 1fr; } }
+  .card-img { max-width: 100%; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+  #login { max-width: 380px; margin: 12vh auto; border-top: 4px solid var(--accent); }
+  #login h2 { font-size: 18px; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<div id="login" class="panel hidden">
+  <h2>Signature Card Dispatcher</h2>
+  <p class="muted">Admin login</p>
+  <form id="loginForm">
+    <label for="pw">Password</label>
+    <input id="pw" type="password" autocomplete="current-password" required>
+    <div class="row" style="margin-top:12px"><button class="btn" type="submit">Log in</button></div>
+    <div id="loginMsg" class="msg bad"></div>
+  </form>
+</div>
+
+<div id="app" class="hidden">
+  <header>
+    <h1>Signature Card Dispatcher</h1>
+    <span class="muted" id="templateId"></span>
+    <span class="spacer"></span>
+    <span class="muted" id="refreshed"></span>
+    <button class="btn secondary" id="logout">Log out</button>
+  </header>
+  <nav>
+    <button data-tab="overview" class="active">Overview</button>
+    <button data-tab="requests">Requests</button>
+    <button data-tab="archive">Archive</button>
+    <button data-tab="test">Test</button>
+    <button data-tab="config">Configuration</button>
+  </nav>
+  <main>
+    <!-- Overview -->
+    <section id="overview" class="active">
+      <div class="panel"><h2>Setup</h2><div class="chips" id="setup"></div></div>
+      <div class="grid" id="stats" style="margin-bottom:16px"></div>
+      <div class="panel">
+        <h2>Connections</h2>
+        <div class="row">
+          <button class="btn secondary" data-check="onboarding-api">Test onboarding API</button>
+          <button class="btn secondary" data-check="t24-sftp">Test T24 SFTP</button>
+          <button class="btn secondary" data-check="source-sftp">Test onboarding SFTP</button>
+        </div>
+        <div id="checkMsg" class="msg"></div>
+      </div>
+      <div class="panel"><h2>Live events <span class="muted">(newest first, refreshes every 5 s)</span></h2><pre class="log mono" id="events"></pre></div>
+    </section>
+
+    <!-- Requests -->
+    <section id="requests">
+      <div class="panel">
+        <h2>Recent requests <span class="muted">(click a row for details)</span></h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Time</th><th>Request UUID</th><th>Status</th><th>Account</th><th>Delivery</th><th>Reason</th></tr></thead>
+          <tbody id="reqRows"></tbody>
+        </table></div>
+      </div>
+      <div class="panel hidden" id="reqDetail">
+        <h2>Request detail</h2>
+        <div class="detail">
+          <div><pre class="log mono" id="reqJson"></pre></div>
+          <div id="reqCard"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Archive -->
+    <section id="archive">
+      <div class="panel">
+        <h2>Archived cards <span class="muted">(one per account; the copy kept if anything happens)</span></h2>
+        <div class="row" style="margin-bottom:12px">
+          <input type="search" id="archQ" placeholder="Search account number or request UUID" style="max-width:340px">
+          <button class="btn secondary" id="archSearch">Search</button>
+          <span class="spacer" style="flex:1"></span>
+          <button class="btn secondary" id="exportSel">Export selected (ZIP)</button>
+          <button class="btn" id="exportAll">Export all (ZIP)</button>
+        </div>
+        <div class="table-wrap"><table>
+          <thead><tr><th><input type="checkbox" id="archAll" aria-label="select all"></th><th>Account</th><th>Request UUID</th><th>Created</th><th>Size</th><th>SHA-256</th><th>Delivery</th><th></th></tr></thead>
+          <tbody id="archRows"></tbody>
+        </table></div>
+        <div id="archMsg" class="msg"></div>
+      </div>
+      <div class="panel hidden" id="archPreview"><h2 id="archPreviewTitle"></h2><div id="archPreviewBody"></div></div>
+    </section>
+
+    <!-- Test -->
+    <section id="test">
+      <div class="panel">
+        <h2>Send a test request <span class="muted">(through the real endpoint; use a TEST customer)</span></h2>
+        <form id="testForm" class="form">
+          <div><label for="tNid">National ID</label><input id="tNid" type="text" required></div>
+          <div><label for="tPass">Passport number</label><input id="tPass" type="text" required></div>
+          <div><label for="tPhone">Phone number</label><input id="tPhone" type="text" required></div>
+          <div><label for="tUuid">Request UUID</label>
+            <div class="row"><input id="tUuid" type="text" class="mono" style="flex:1"><button type="button" class="btn secondary" id="tNew">New</button></div></div>
+        </form>
+        <div class="row" style="margin-top:12px"><button class="btn" id="tSend">Send</button><span class="muted" id="tState"></span></div>
+      </div>
+      <div class="panel hidden" id="tResult">
+        <h2>Response</h2>
+        <div class="detail"><div><pre class="log mono" id="tJson"></pre></div><div id="tCard"></div></div>
+      </div>
+    </section>
+
+    <!-- Configuration -->
+    <section id="config">
+      <div id="cfgGroups"></div>
+      <div class="panel">
+        <h2>Passwords and keys</h2>
+        <p class="muted" id="secretsNote"></p>
+        <div class="form" id="secretFields"></div>
+        <div class="row" style="margin-top:14px">
+          <span>Quarantine key:</span> <span id="qkState"></span>
+          <button class="btn secondary" id="qkGen">Generate</button>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="row"><button class="btn" id="cfgSave">Save &amp; apply</button><button class="btn secondary" id="cfgReload">Discard changes</button></div>
+        <div id="cfgMsg" class="msg"></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const el = (tag, attrs = {}, ...kids) => {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") e.className = v; else if (k.startsWith("on")) e.addEventListener(k.slice(2), v); else e.setAttribute(k, v);
+  }
+  for (const k of kids) if (k != null) e.append(k instanceof Node ? k : String(k));
+  return e;
+};
+const badgeClass = (s) => ({ QUEUED: "info", EXISTS: "info", DELIVERED: "ok", PENDING: "warn", FAILED: "bad",
+  REJECTED: "bad", SUSPICIOUS: "bad", UNAVAILABLE: "warn", NOT_CONFIGURED: "warn", NONE: "" }[s] || "");
+const badge = (s) => s ? el("span", { class: "badge " + badgeClass(s) }, s) : "";
+const time = (iso) => iso ? new Date(iso).toLocaleString() : "";
+const short = (s, n = 8) => s ? s.slice(0, n) + "…" : "";
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    credentials: "same-origin", ...opts,
+    headers: { "X-Requested-With": "dashboard", ...(opts.body ? { "Content-Type": "application/json" } : {}), ...(opts.headers || {}) },
+  });
+  if (res.status === 401 && !path.endsWith("/login")) { showLogin(); throw new Error("login required"); }
+  return res;
+}
+async function apiJson(path, opts) { const r = await api(path, opts); return { status: r.status, body: await r.json() }; }
+function showMsg(box, text, kind) { box.textContent = text; box.className = "msg show " + kind; }
+
+// ---- login ----
+function showLogin() { $("app").classList.add("hidden"); $("login").classList.remove("hidden"); $("pw").focus(); }
+function showApp() { $("login").classList.add("hidden"); $("app").classList.remove("hidden"); }
+$("loginForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const r = await apiJson("/admin/login", { method: "POST", body: JSON.stringify({ password: $("pw").value }) });
+  $("pw").value = "";
+  if (r.status === 200) { showApp(); refreshActive(); } else showMsg($("loginMsg"), r.body.message, "bad");
+});
+$("logout").addEventListener("click", async () => { await api("/admin/logout", { method: "POST" }); showLogin(); });
+
+// ---- tabs ----
+let active = "overview";
+document.querySelectorAll("nav button").forEach((b) => b.addEventListener("click", () => {
+  document.querySelectorAll("nav button").forEach((x) => x.classList.toggle("active", x === b));
+  document.querySelectorAll("section").forEach((s) => s.classList.toggle("active", s.id === b.dataset.tab));
+  active = b.dataset.tab; refreshActive();
+}));
+function refreshActive() {
+  if (active === "overview") loadOverview();
+  else if (active === "requests") loadRequests();
+  else if (active === "archive") loadArchive();
+  else if (active === "config") loadConfig();
+}
+setInterval(() => { if (!$("app").classList.contains("hidden") && (active === "overview" || active === "requests")) refreshActive(); }, 5000);
+
+// ---- overview ----
+async function loadOverview() {
+  const { status, body } = await apiJson("/admin/api/overview");
+  if (status !== 200) return;
+  $("templateId").textContent = "template " + body.templateId;
+  const names = { onboardingApi: "Onboarding API", t24Sftp: "T24 SFTP host", t24HostKey: "T24 SFTP key pinned",
+    sourceSftp: "Onboarding SFTP + paths", sourceHostKey: "Onboarding SFTP key pinned",
+    quarantineKey: "Quarantine key", secretsStore: "Secrets store" };
+  $("setup").replaceChildren(...Object.entries(names).map(([k, n]) =>
+    el("span", { class: "chip " + (body.setup[k] ? "ok" : "warn") }, (body.setup[k] ? "✓ " : "✗ ") + n)));
+  const t = body.requestsToday;
+  const stats = [
+    ["Queued for T24", body.counts.queued], ["Cards archived", body.counts.archived],
+    ["Failed deliveries", body.counts.failedDeliveries], ["Quarantined files", body.counts.quarantined],
+    ["Today: queued", t.QUEUED || 0], ["Today: existing", t.EXISTS || 0],
+    ["Today: rejected", t.REJECTED || 0], ["Today: suspicious", t.SUSPICIOUS || 0],
+  ];
+  $("stats").replaceChildren(...stats.map(([l, n]) => el("div", { class: "stat" }, el("div", { class: "n" }, n), el("div", { class: "l" }, l))));
+  $("events").textContent = body.events.join("\n") || "no events yet";
+  $("refreshed").textContent = "updated " + new Date().toLocaleTimeString();
+}
+document.querySelectorAll("[data-check]").forEach((b) => b.addEventListener("click", async () => {
+  b.disabled = true; showMsg($("checkMsg"), "checking " + b.textContent + "…", "info");
+  try {
+    const { body } = await apiJson("/admin/api/check", { method: "POST", body: JSON.stringify({ target: b.dataset.check }) });
+    showMsg($("checkMsg"), b.textContent.replace("Test ", "") + ": " + body.message, body.ok ? "ok" : "bad");
+  } finally { b.disabled = false; }
+}));
+
+// ---- requests ----
+async function loadRequests() {
+  const { status, body } = await apiJson("/admin/api/requests");
+  if (status !== 200) return;
+  $("reqRows").replaceChildren(...(body.length ? body.map((r) => el("tr", { class: "click", onclick: () => showRequest(r) },
+    el("td", {}, time(r.createdAt)), el("td", { class: "mono" }, r.requestId || ""), el("td", {}, badge(r.status)),
+    el("td", { class: "mono" }, r.accountNumber || ""), el("td", {}, badge(r.delivery)), el("td", { class: "muted" }, r.reason || "")))
+    : [el("tr", {}, el("td", { colspan: 6, class: "muted" }, "no requests yet"))]));
+}
+function cardView(account) {
+  if (!account) return el("p", { class: "muted" }, "no card for this request");
+  return el("div", {},
+    el("img", { class: "card-img", alt: "card " + account, src: "/admin/api/archive/" + account + ".jpg?v=" + Date.now() }),
+    el("div", { class: "row", style: "margin-top:8px" },
+      el("a", { class: "btn secondary", href: "/admin/api/archive/" + account + ".jpg?download=1", style: "text-decoration:none" }, "Download " + account + ".jpg")));
+}
+function showRequest(r) {
+  $("reqDetail").classList.remove("hidden");
+  $("reqJson").textContent = JSON.stringify(r, null, 2);
+  $("reqCard").replaceChildren(cardView(r.accountNumber));
+  $("reqDetail").scrollIntoView({ behavior: "smooth" });
+}
+
+// ---- archive ----
+async function loadArchive() {
+  const q = $("archQ").value.trim();
+  const { status, body } = await apiJson("/admin/api/archive" + (q ? "?q=" + encodeURIComponent(q) : ""));
+  if (status !== 200) return;
+  $("archAll").checked = false;
+  $("archRows").replaceChildren(...(body.length ? body.map((r) => el("tr", {},
+    el("td", {}, el("input", { type: "checkbox", class: "archSel", value: r.accountNumber, "aria-label": "select " + r.accountNumber })),
+    el("td", { class: "mono" }, r.accountNumber), el("td", { class: "mono" }, r.requestId || ""),
+    el("td", {}, time(r.createdAt)), el("td", {}, Math.round(r.bytes / 1024) + " KB"),
+    el("td", { class: "mono", title: r.sha256 || "" }, short(r.sha256, 12)), el("td", {}, badge(r.delivery)),
+    el("td", {}, el("button", { class: "btn secondary", onclick: () => previewArchive(r.accountNumber) }, "View"), " ",
+      el("a", { class: "btn secondary", href: "/admin/api/archive/" + r.accountNumber + ".jpg?download=1", style: "text-decoration:none" }, "Download"))))
+    : [el("tr", {}, el("td", { colspan: 8, class: "muted" }, "no archived cards"))]));
+}
+function previewArchive(account) {
+  $("archPreview").classList.remove("hidden");
+  $("archPreviewTitle").textContent = "Card " + account;
+  $("archPreviewBody").replaceChildren(cardView(account));
+  $("archPreview").scrollIntoView({ behavior: "smooth" });
+}
+$("archSearch").addEventListener("click", loadArchive);
+$("archQ").addEventListener("keydown", (e) => { if (e.key === "Enter") loadArchive(); });
+$("archAll").addEventListener("change", (e) => document.querySelectorAll(".archSel").forEach((c) => (c.checked = e.target.checked)));
+async function exportZip(accounts) {
+  showMsg($("archMsg"), "preparing ZIP…", "info");
+  const r = await api("/admin/api/archive/export", { method: "POST", body: JSON.stringify({ accounts }) });
+  if (r.status !== 200) { showMsg($("archMsg"), "export failed (HTTP " + r.status + ")", "bad"); return; }
+  const name = (r.headers.get("Content-Disposition") || "").match(/filename="([^"]+)"/)?.[1] || "signature-cards.zip";
+  const url = URL.createObjectURL(await r.blob());
+  const a = el("a", { href: url, download: name }); document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  showMsg($("archMsg"), "downloaded " + name + " (" + (accounts.length || "all") + " card(s) + manifest.csv with SHA-256)", "ok");
+}
+$("exportSel").addEventListener("click", () => {
+  const sel = [...document.querySelectorAll(".archSel:checked")].map((c) => c.value);
+  if (!sel.length) { showMsg($("archMsg"), "select at least one card", "warn"); return; }
+  exportZip(sel);
+});
+$("exportAll").addEventListener("click", () => exportZip([]));
+
+// ---- test ----
+$("tUuid").value = crypto.randomUUID(); $("tNew").addEventListener("click", () => ($("tUuid").value = crypto.randomUUID()));
+let poll = null;
+$("tSend").addEventListener("click", async () => {
+  if (!$("testForm").reportValidity()) return;
+  clearInterval(poll);
+  const uuid = $("tUuid").value.trim();
+  $("tState").textContent = "sending…";
+  const r = await fetch("/api/v1/signature-cards", { method: "POST", headers: { "Content-Type": "application/json", "X-Request-Id": uuid },
+    body: JSON.stringify({ nationalId: $("tNid").value.trim(), passportNumber: $("tPass").value.trim(), phoneNumber: $("tPhone").value.trim() }) });
+  const body = await r.json();
+  showTest(r.status, body);
+  if (body.accountNumber && body.delivery === "PENDING") {
+    let n = 0;
+    poll = setInterval(async () => {
+      const g = await fetch("/api/v1/signature-cards/" + uuid); const b = await g.json(); showTest(g.status, b);
+      if (b.delivery !== "PENDING" || ++n > 60) clearInterval(poll);
+    }, 3000);
+  }
+});
+function showTest(status, body) {
+  $("tResult").classList.remove("hidden");
+  $("tState").textContent = "HTTP " + status + " · " + (body.status || "") + (body.delivery ? " · delivery " + body.delivery : "");
+  $("tJson").textContent = JSON.stringify(body, null, 2);
+  $("tCard").replaceChildren(body.accountNumber ? cardView(body.accountNumber) : el("p", { class: "muted" }, "no card"));
+}
+
+// ---- configuration ----
+let cfgOriginal = {};
+async function loadConfig() {
+  const { status, body } = await apiJson("/admin/api/config");
+  if (status !== 200) return;
+  cfgOriginal = {};
+  const groups = {};
+  for (const f of body.fields) (groups[f.group] ||= []).push(f);
+  $("cfgGroups").replaceChildren(...Object.entries(groups).map(([g, fields]) => {
+    const target = g.startsWith("T24 SFTP") ? "t24-sftp" : g.startsWith("Onboarding SFTP") ? "source-sftp" : null;
+    return el("div", { class: "panel" }, el("h2", {}, g),
+      el("div", { class: "form" }, ...fields.map((f) => { cfgOriginal[f.key] = f.value;
+        return el("div", {}, el("label", { for: "cfg-" + f.key }, f.label + " ", el("code", {}, f.key)),
+          el("input", { type: "text", id: "cfg-" + f.key, "data-key": f.key, value: f.value, class: "mono" })); })),
+      target ? hostKeyBox(target) : null);
+  }));
+  $("secretsNote").textContent = body.secretsStore
+    ? "Stored encrypted on the server. Values are never shown; type a new value to replace one, or tick Clear."
+    : "SECRETS_MASTER_KEY is not set on the server, so passwords can't be stored from here.";
+  const srcLabel = { env: ["set by environment variable", "info"], store: ["✓ set", "ok"], none: ["✗ not set", "warn"] };
+  $("secretFields").replaceChildren(...Object.entries(body.secrets).filter(([n]) => n !== "QUARANTINE_KEY").map(([n, src]) =>
+    el("div", {}, el("label", { for: "sec-" + n }, n + " ", el("span", { class: "badge " + srcLabel[src][1] }, srcLabel[src][0])),
+      el("input", { type: "password", id: "sec-" + n, "data-secret": n, autocomplete: "new-password", placeholder: "new value (leave empty to keep)" }),
+      el("label", { style: "margin-top:4px" }, el("input", { type: "checkbox", "data-clear": n }), " Clear"))));
+  const q = srcLabel[body.secrets.QUARANTINE_KEY];
+  $("qkState").replaceChildren(el("span", { class: "badge " + q[1] }, q[0]), " ",
+    el("span", { class: "muted" }, body.quarantineFiles + " file(s) in quarantine"));
+  $("qkGen").textContent = body.secrets.QUARANTINE_KEY === "store" ? "Replace…" : "Generate";
+  $("qkGen").disabled = !body.secretsStore || body.secrets.QUARANTINE_KEY === "env";
+  $("qkGen").dataset.replace = body.secrets.QUARANTINE_KEY === "store" ? "1" : "";
+}
+function hostKeyBox(target) {
+  const out = el("div", { class: "msg" });
+  const pinBtn = el("button", { class: "btn hidden" }, "Pin this key");
+  const cancelBtn = el("button", { class: "btn secondary hidden" }, "Cancel");
+  const disarm = () => { pinBtn.dataset.armed = ""; pinBtn.textContent = "Pin this key"; cancelBtn.classList.add("hidden"); };
+  cancelBtn.addEventListener("click", disarm);
+  let fp = null;
+  const fetchBtn = el("button", { class: "btn secondary", onclick: async () => {
+    showMsg(out, "reading the server's host key (save host/port first)…", "info"); pinBtn.classList.add("hidden"); disarm();
+    const { body } = await apiJson("/admin/api/hostkey/fetch", { method: "POST", body: JSON.stringify({ target }) });
+    if (!body.ok) { showMsg(out, body.message, "bad"); return; }
+    fp = body.fingerprint;
+    showMsg(out, body.host + " presents " + fp + ". Pin it only if this matches the fingerprint the server's admin gave you.", "warn");
+    pinBtn.classList.remove("hidden");
+  } }, "Fetch host key");
+  pinBtn.addEventListener("click", async () => {
+    if (!pinBtn.dataset.armed) { // two-step: the first click asks, the second click pins
+      pinBtn.dataset.armed = "1"; pinBtn.textContent = "Yes, it matches — pin it"; cancelBtn.classList.remove("hidden"); return;
+    }
+    disarm();
+    const { body } = await apiJson("/admin/api/hostkey/pin", { method: "POST", body: JSON.stringify({ target, fingerprint: fp }) });
+    showMsg(out, body.ok ? "✓ " + body.fingerprint + " " + body.message : body.message, body.ok ? "ok" : "bad");
+    pinBtn.classList.add("hidden");
+  });
+  return el("div", { style: "margin-top:12px" }, el("div", { class: "row" }, fetchBtn, pinBtn, cancelBtn), out);
+}
+$("cfgSave").addEventListener("click", async () => {
+  const settings = {};
+  document.querySelectorAll("[data-key]").forEach((i) => { if (i.value !== cfgOriginal[i.dataset.key]) settings[i.dataset.key] = i.value; });
+  const secrets = {};
+  document.querySelectorAll("[data-secret]").forEach((i) => { if (i.value) secrets[i.dataset.secret] = i.value; });
+  document.querySelectorAll("[data-clear]:checked").forEach((c) => (secrets[c.dataset.clear] = ""));
+  const { status, body } = await apiJson("/admin/api/config", { method: "PUT", body: JSON.stringify({ settings, secrets }) });
+  showMsg($("cfgMsg"), body.message + (body.backup ? " · previous config saved as " + body.backup : ""), status === 200 ? "ok" : "bad");
+  if (status === 200) loadConfig();
+});
+$("cfgReload").addEventListener("click", () => { loadConfig(); showMsg($("cfgMsg"), "changes discarded", "info"); });
+$("qkGen").addEventListener("click", async () => {
+  const replace = !!$("qkGen").dataset.replace;
+  if (replace && !$("qkGen").dataset.armed) { // two-step: the first click warns, the second click replaces
+    $("qkGen").dataset.armed = "1";
+    $("qkGen").textContent = "Yes, replace (files already in quarantine will need the OLD key)";
+    setTimeout(() => { $("qkGen").dataset.armed = ""; loadConfig(); }, 10000);
+    return;
+  }
+  $("qkGen").dataset.armed = "";
+  const { status, body } = await apiJson("/admin/api/quarantine-key", { method: "POST", body: JSON.stringify({ replace }) });
+  showMsg($("cfgMsg"), body.message, status === 200 ? "ok" : "bad");
+  loadConfig();
+});
+
+// ---- start ----
+(async () => {
+  const r = await fetch("/admin/api/overview", { credentials: "same-origin" });
+  if (r.status === 200) { showApp(); loadOverview(); } else showLogin();
+})();
+</script>
+</body>
+</html>
