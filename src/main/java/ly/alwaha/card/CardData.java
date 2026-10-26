@@ -1,12 +1,20 @@
 package ly.alwaha.card;
 
-/** The text printed on the card. ACC Name and all four name fields use fullName. */
-public record CardData(String fullName, String branch, String accountNumber) {
+/**
+ * The text printed on the card. ACC Name and all four name fields use fullName.
+ * branchCode is not printed: it locates the customer's folder on the onboarding SFTP (its last 3 characters).
+ */
+public record CardData(String fullName, String branch, String accountNumber, String branchCode) {
+
+    public CardData(String fullName, String branch, String accountNumber) {
+        this(fullName, branch, accountNumber, null);
+    }
 
     public CardData {
         fullName = fullName == null ? null : fullName.strip();
         branch = branch == null ? null : branch.strip();
         accountNumber = accountNumber == null ? null : accountNumber.strip();
+        branchCode = branchCode == null ? null : branchCode.strip();
     }
 
     /**

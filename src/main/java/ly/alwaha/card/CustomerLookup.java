@@ -9,13 +9,16 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.time.Instant;
+import java.util.Map;
+import java.util.TreeMap;
 import java.util.regex.Pattern;
 
 /**
  * Builds the card text from the onboarding API:
- *   1. account details by national ID + passport + phone  → account number, name, branch code
- *   2. (only if api.cif.enabled) CIF = first 7 digits → name + branch from get CIF instead
- * The card gets the ARABIC part of the name, and the branch NAME looked up from the branch code in the branch table.
+ *   1. account details by national ID + passport + phone → account number, name, branch code
+ *   2. branch name: the Arabic name saved in the branch table; if there is none yet, the English name from getBranches
+ * The card gets the ARABIC part of the customer's name.
  * Permanent problems (customer not found, missing field, unknown branch code) throw RejectedException.
  * Temporary ones (timeout, 5xx) throw IOException, so the request can be retried.
  * Identity values are never logged.
@@ -28,36 +31,74 @@ public final class CustomerLookup {
     // Path segments: letters, digits and a leading + for phones. Nothing that could change the URL.
     private static final Pattern SEGMENT = Pattern.compile("\\+?[A-Za-z0-9]{1,40}");
     // A word with at least one Arabic letter (Arabic, Arabic Supplement, presentation forms).
-    private static final Pattern ARABIC = Pattern.compile("[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]");
+    private static final Pattern ARABIC = Pattern.compile("[؀-ۿݐ-ݿﭐ-﷿ﹰ-﻿]");
+    // The branch list rarely changes: fetch it at most once an hour (or on "Refresh" in the dashboard).
+    private static final Duration BRANCHES_TTL = Duration.ofHours(1);
+    // An unknown code may be a brand-new branch: allow one early refresh, but not more often than this.
+    private static final Duration BRANCHES_MIN_REFRESH = Duration.ofMinutes(5);
 
     private final Config.Api api;
     private final HttpClient http;
     private final ObjectMapper json = new ObjectMapper();
+    private Map<String, String> branchList;   // code → English name, from getBranches
+    private Instant branchListAt = Instant.EPOCH;
 
     public CustomerLookup(Config.Api api) {
         this.api = api;
         this.http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(api.timeoutSeconds())).build();
     }
 
-    /** Base URL and the account path are set (and the CIF path, if CIF is switched on). */
+    /** Base URL and the account path are set. */
     public boolean configured() {
-        return !api.baseUrl().isEmpty() && !api.accountPath().isEmpty() && (!api.cifEnabled() || !api.cifPath().isEmpty());
+        return api.local() != null || !api.baseUrl().isEmpty() && !api.accountPath().isEmpty();
+    }
+
+    /** The account-details response: from the API, or in LOCAL TEST MODE from the customers file. */
+    private JsonNode accountResponse(Identity id) throws IOException, RejectedException {
+        String path = accountPath(id); // validates the identity values either way
+        if (api.local() == null) return get("account details", path, true);
+        JsonNode customers = readLocal(api.local().customersFile());
+        for (JsonNode c : customers) {
+            if (c.path("nationalId").asText().equals(id.nationalId().strip())
+                    && c.path("passportNumber").asText().equals(id.passportNumber().strip())
+                    && c.path("phoneNumber").asText().equals(id.phoneNumber().strip())) {
+                return c.path("response");
+            }
+        }
+        throw new RejectedException("account details: customer not found (404) [local test file]");
+    }
+
+    /** The getBranches response: from the API, or in LOCAL TEST MODE from the branches file. */
+    private JsonNode branchesResponse() throws IOException, RejectedException {
+        if (api.local() != null) return readLocal(api.local().branchesFile());
+        if (api.baseUrl().isEmpty() || api.branchesPath().isEmpty()) {
+            throw new IOException("getBranches is not configured (api.base.url / api.branches.path)");
+        }
+        return get("getBranches", api.branchesPath(), false);
+    }
+
+    private JsonNode readLocal(java.nio.file.Path file) throws IOException {
+        if (!java.nio.file.Files.exists(file)) throw new IOException("local test file not found: " + file);
+        try {
+            return json.readTree(file.toFile());
+        } catch (IOException e) {
+            throw new IOException("local test file is not valid JSON: " + file);
+        }
     }
 
     public CardData lookup(Identity id) throws IOException, RejectedException {
         if (!configured()) throw new IOException("onboarding API is not configured (api.base.url / api.account.path)");
-        JsonNode account = get("account details", accountPath(id));
+        JsonNode account = accountResponse(id);
         String accountNumber = field(account, api.accountNumberPointer(), "account number");
-        if (!accountNumber.matches("\\d+") || accountNumber.length() < api.cifDigits()) {
-            throw new RejectedException("account number from the onboarding API is not numeric or shorter than " + api.cifDigits() + " digits");
+        if (!accountNumber.matches("\\d+")) {
+            throw new RejectedException("account number from the onboarding API is not numeric");
         }
-        JsonNode details = api.cifEnabled()
-                ? get("get CIF", api.cifPath().replace("{cif}", accountNumber.substring(0, api.cifDigits())))
-                : account;
+        String branchCode = field(account, api.branchPointer(), "branch");
         return new CardData(
-                arabicPart(field(details, api.fullNamePointer(), "customer name")),
-                branchName(field(details, api.branchPointer(), "branch")),
-                accountNumber);
+                arabicPart(field(account, api.fullNamePointer(), "customer name")),
+                branchName(branchCode),
+                accountNumber,
+                branchCode);
     }
 
     /** Only the Arabic words, in their original order: "MOHAMED ALI محمد علي" → "محمد علي". */
@@ -70,39 +111,59 @@ public final class CustomerLookup {
         return out.toString();
     }
 
-    private String branchName(String code) throws RejectedException {
-        String name = api.branches().get(code.strip());
-        if (name == null || name.isBlank()) {
-            throw new RejectedException("branch code " + code.strip() + " is not in the branch table (add it in the dashboard)");
+    /** Arabic name from the branch table; if none is saved yet, the English name from getBranches. */
+    private String branchName(String rawCode) throws IOException, RejectedException {
+        String code = rawCode.strip();
+        String arabic = api.branches().get(code);
+        if (arabic != null && !arabic.isBlank()) return arabic;
+        String english = branches(false).get(code);
+        if (english == null && Instant.now().isAfter(branchListAt.plus(BRANCHES_MIN_REFRESH))) {
+            english = branches(true).get(code);
         }
-        return name;
+        if (english == null || english.isBlank()) {
+            throw new RejectedException("branch code " + code + " is not in the getBranches list");
+        }
+        return english;
+    }
+
+    /** code → English name from getBranches, cached for an hour; force = fetch now (dashboard "Refresh"). */
+    public synchronized Map<String, String> branches(boolean force) throws IOException, RejectedException {
+        if (!force && branchList != null && Instant.now().isBefore(branchListAt.plus(BRANCHES_TTL))) return branchList;
+        JsonNode list = branchesResponse().at(api.branchesListPointer());
+        if (!list.isArray()) {
+            throw new RejectedException("getBranches response has no list at " + api.branchesListPointer());
+        }
+        Map<String, String> out = new TreeMap<>();
+        for (JsonNode b : list) {
+            String code = b.path(api.branchCodeField()).asText("").strip();
+            String name = b.path(api.branchNameField()).asText("").strip();
+            if (!code.isEmpty() && !name.isEmpty()) out.putIfAbsent(code, name);
+        }
+        branchList = Map.copyOf(out);
+        branchListAt = Instant.now();
+        return branchList;
     }
 
     /**
-     * For check-api: prints the raw responses and what each JSON pointer picks out (plus the Arabic name and
-     * the branch-table result), so the settings can be matched to the real response. Use a TEST customer only.
+     * For check-api: prints the raw account response and what each field picks out (plus the Arabic name and
+     * the branch result), so the settings can be matched to the real response. Use a TEST customer only.
      */
     public String probe(Identity id) throws IOException {
         StringBuilder r = new StringBuilder();
         try {
-            JsonNode account = get("account details", accountPath(id));
+            JsonNode account = accountResponse(id);
             r.append("account details response:\n").append(json.writerWithDefaultPrettyPrinter().writeValueAsString(account)).append('\n');
             String accountNumber = field(account, api.accountNumberPointer(), "account number");
             r.append("  ").append(api.accountNumberPointer()).append(" -> ").append(accountNumber)
                     .append(" (").append(accountNumber.length()).append(" digits)\n");
-            JsonNode details = account;
-            if (api.cifEnabled()) {
-                String cif = accountNumber.substring(0, Math.min(api.cifDigits(), accountNumber.length()));
-                details = get("get CIF", api.cifPath().replace("{cif}", cif));
-                r.append("\nget CIF (").append(cif).append(") response:\n")
-                        .append(json.writerWithDefaultPrettyPrinter().writeValueAsString(details)).append('\n');
-            }
-            String name = field(details, api.fullNamePointer(), "customer name");
+            String name = field(account, api.fullNamePointer(), "customer name");
             r.append("  ").append(api.fullNamePointer()).append(" -> ").append(name).append('\n');
             r.append("     Arabic part for the card -> ").append(arabicPart(name)).append('\n');
-            String code = field(details, api.branchPointer(), "branch");
+            String code = field(account, api.branchPointer(), "branch");
             r.append("  ").append(api.branchPointer()).append(" -> ").append(code).append('\n');
-            r.append("     branch table -> ").append(branchName(code)).append('\n');
+            String saved = api.branches().get(code);
+            r.append("     branch on the card -> ").append(saved != null ? saved + " (Arabic, from the branch table)"
+                    : branchName(code) + " (English from getBranches: no Arabic name saved yet)").append('\n');
             r.append("\nOK: all fields matched");
         } catch (RejectedException e) {
             r.append("\nSTOPPED: ").append(e.getMessage()).append("\n-> adjust the setting to match the response above");
@@ -117,7 +178,8 @@ public final class CustomerLookup {
                 .replace("{phoneNumber}", segment("phoneNumber", id.phoneNumber()));
     }
 
-    private JsonNode get(String what, String path) throws IOException, RejectedException {
+    /** notFoundIsCustomer: a 404 on the account call means "no such customer"; on getBranches it's a setup problem. */
+    private JsonNode get(String what, String path, boolean notFoundIsCustomer) throws IOException, RejectedException {
         HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(api.baseUrl() + path))
                 .timeout(Duration.ofSeconds(api.timeoutSeconds()))
                 .header("Accept", "application/json")
@@ -134,8 +196,10 @@ public final class CustomerLookup {
             throw new IOException(what + " call interrupted", e);
         }
         int status = res.statusCode();
-        if (status == 404) throw new RejectedException(what + ": customer not found (404)");
-        if (status >= 500 || status == 429 || status == 408) throw new IOException(what + " returned HTTP " + status);
+        if (status == 404 && notFoundIsCustomer) throw new RejectedException(what + ": customer not found (404)");
+        if (status >= 500 || status == 429 || status == 408 || status == 404) {
+            throw new IOException(what + " returned HTTP " + status);
+        }
         if (status != 200) throw new RejectedException(what + " returned HTTP " + status);
         try {
             return json.readTree(res.body());

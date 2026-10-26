@@ -30,9 +30,11 @@ public final class DevServer {
 
         Path sftpRoot = Files.createDirectories(tmp.resolve("sftp-root"));
         Files.createDirectories(sftpRoot.resolve("repo"));
-        Path customer = Files.createDirectories(sftpRoot.resolve("onboarding").resolve(TestSupport.NID));
-        ImageIO.write(TestSupport.selfie(), "jpg", customer.resolve("selfie.jpg").toFile());
-        ImageIO.write(TestSupport.signature(), "png", customer.resolve("signature.png").toFile());
+        // Same layout as the app's OCR_Uploads: {branch3}/{nationalId}_{accountNumber}_{traceNumber}/*.bmp
+        Path customer = Files.createDirectories(sftpRoot.resolve("OCR_Uploads").resolve("002")
+                .resolve(TestSupport.NID + "_" + TestSupport.ACCOUNT + "_c07a5154"));
+        ImageIO.write(TestSupport.selfie(), "bmp", customer.resolve("Profile.bmp").toFile());
+        ImageIO.write(TestSupport.signature(), "bmp", customer.resolve("SignatureCard.bmp").toFile());
         SshServer sshd = SshServer.setUpDefaultServer();
         sshd.setHost("127.0.0.1");
         sshd.setPort(0);
@@ -56,7 +58,6 @@ public final class DevServer {
                 "font.bold=" + root + "/fonts/Almarai-Bold.ttf",
                 "poll.seconds=3",
                 "api.base.url=" + onboardingApi.baseUrl(),
-                "api.cif.path=" + StubOnboardingApi.CIF_PATH + "{cif}",
                 "branches.file=" + configDir.toString().replace('\\', '/') + "/branches.properties",
                 "sftp.host=127.0.0.1",
                 "sftp.port=" + sshd.getPort(),
@@ -67,8 +68,7 @@ public final class DevServer {
                 "source.sftp.port=" + sshd.getPort(),
                 "source.sftp.user=t24",
                 "source.sftp.known.hosts=" + configDir.toString().replace('\\', '/') + "/source_known_hosts",
-                "source.selfie.path=/onboarding/{nationalId}/selfie.jpg",
-                "source.signature.path=/onboarding/{nationalId}/signature.png",
+                "source.root=/OCR_Uploads",
                 "server.bind=127.0.0.1",
                 "server.port=" + port,
                 ""), StandardCharsets.UTF_8);

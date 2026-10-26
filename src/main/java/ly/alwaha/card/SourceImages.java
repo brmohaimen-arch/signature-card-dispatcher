@@ -5,19 +5,24 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
  * Reads the selfie and signature from the onboarding SFTP. READ ONLY: nothing on that server is written,
- * moved or deleted. Metadata first: the remote size is checked before anything is downloaded.
+ * moved or deleted. Metadata first: folders are listed and the remote size is checked before anything is downloaded.
+ *
+ * The app's layout: {root}/{branch3}/{nationalId}_{accountNumber}_{traceNumber}/Profile.bmp + SignatureCard.bmp
+ * The folder is found with source.folder.pattern ("*" = anything, e.g. the 8-character code); the newest match wins.
  */
 public final class SourceImages {
 
-    public record Fetched(Path selfie, Path signature) {}
+    public record Fetched(Path selfie, Path signature, int matchingFolders) {}
 
-    private static final Pattern PLACEHOLDER = Pattern.compile("\\{([A-Za-z]+)}");
+    private static final Pattern PLACEHOLDER = Pattern.compile("\\{([A-Za-z0-9]+)}");
     private static final Pattern SAFE_EXT = Pattern.compile("[a-z0-9]{1,5}");
 
     private final Config.Source source;
@@ -34,16 +39,56 @@ public final class SourceImages {
         return source.configured();
     }
 
-    /** Downloads both images into stagingDir (our copies). Path values must already be validated. */
+    /** Finds the customer's folder and downloads both images into stagingDir (our copies). Values must be validated. */
     public Fetched fetch(String requestId, Map<String, String> vars, Path stagingDir) throws IOException, RejectedException {
-        try (SftpConnection c = SftpConnection.connect(source.sftp())) {
-            Path selfie = fetchOne(c, "selfie", expand(source.selfiePath(), vars), requestId, stagingDir);
-            Path signature = fetchOne(c, "signature", expand(source.signaturePath(), vars), requestId, stagingDir);
-            return new Fetched(selfie, signature);
+        try (SourceFiles c = source.local() ? LocalFolders.source() : SftpConnection.connect(source.sftp())) {
+            String pattern = expand(source.folderPattern(), vars);
+            int slash = pattern.lastIndexOf('/');
+            String parent = join(source.effectiveRoot(), slash < 0 ? "" : pattern.substring(0, slash));
+            Pattern folder = glob(pattern.substring(slash + 1));
+
+            List<SourceFiles.Entry> matches = c.list(parent).stream()
+                    .filter(e -> e.directory() && folder.matcher(e.name()).matches())
+                    .sorted(Comparator.comparing(SourceFiles.Entry::modified).reversed())
+                    .toList();
+            // Not there (yet) is temporary: the app may still be uploading, so it can retry with the same requestId.
+            if (matches.isEmpty()) throw new IOException("customer folder not found on the onboarding server (yet)");
+            String dir = join(parent, matches.get(0).name());
+
+            List<SourceFiles.Entry> files = c.list(dir);
+            Path selfie = fetchOne(c, "selfie", join(dir, file(files, source.selfieFile(), "selfie")), requestId, stagingDir);
+            Path signature = fetchOne(c, "signature", join(dir, file(files, source.signatureFile(), "signature")), requestId, stagingDir);
+            return new Fetched(selfie, signature, matches.size());
         }
     }
 
-    private Path fetchOne(SftpConnection c, String kind, String remote, String requestId, Path dir)
+    /** The file whose name without extension is base (case-insensitive), e.g. "Profile" → Profile.bmp. */
+    private static String file(List<SourceFiles.Entry> files, String base, String kind) throws IOException {
+        for (SourceFiles.Entry e : files) {
+            if (e.directory()) continue;
+            int dot = e.name().lastIndexOf('.');
+            String stem = dot < 0 ? e.name() : e.name().substring(0, dot);
+            if (stem.equalsIgnoreCase(base)) return e.name();
+        }
+        throw new IOException(kind + " (" + base + ".*) not found in the customer folder (yet)");
+    }
+
+    /** "*" matches anything; everything else is literal. */
+    static Pattern glob(String g) {
+        StringBuilder re = new StringBuilder();
+        for (String part : g.split("\\*", -1)) {
+            if (re.length() > 0 || g.startsWith("*")) re.append(".*");
+            re.append(Pattern.quote(part));
+        }
+        return Pattern.compile(g.equals("*") ? ".*" : re.toString());
+    }
+
+    private static String join(String a, String b) {
+        if (b.isEmpty()) return a;
+        return a.endsWith("/") ? a + b : a + "/" + b;
+    }
+
+    private Path fetchOne(SourceFiles c, String kind, String remote, String requestId, Path dir)
             throws IOException, RejectedException {
         String name = kind + extension(remote);
         long size = c.size(remote);

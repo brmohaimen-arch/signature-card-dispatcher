@@ -56,16 +56,17 @@ public final class AdminApi {
     public record Field(String key, String group, String label, boolean restart) {}
 
     public static final List<Field> FIELDS = List.of(
-            new Field("api.base.url", "Onboarding API (account + CIF lookup)", "Base URL (e.g. http://host:port)", false),
-            new Field("api.account.path", "Onboarding API (account + CIF lookup)", "Account details path", false),
-            new Field("api.account.number.pointer", "Onboarding API (account + CIF lookup)", "Account number field (JSON pointer)", false),
-            new Field("api.name.pointer", "Onboarding API (account + CIF lookup)", "Customer name field (JSON pointer; Arabic part is used)", false),
-            new Field("api.branch.pointer", "Onboarding API (account + CIF lookup)", "Branch code field (JSON pointer)", false),
-            new Field("api.cif.enabled", "Onboarding API (account + CIF lookup)", "Use get CIF for name + branch (true / false)", false),
-            new Field("api.cif.path", "Onboarding API (account + CIF lookup)", "Get CIF path ({cif} = first 7 digits), only if enabled", false),
-            new Field("api.cif.digits", "Onboarding API (account + CIF lookup)", "CIF digits", false),
-            new Field("api.auth.header", "Onboarding API (account + CIF lookup)", "Auth header name (empty = none)", false),
-            new Field("api.timeout.seconds", "Onboarding API (account + CIF lookup)", "Timeout (seconds)", false),
+            new Field("api.base.url", "Onboarding API", "Base URL (e.g. http://host:port)", false),
+            new Field("api.account.path", "Onboarding API", "Account details path", false),
+            new Field("api.account.number.pointer", "Onboarding API", "Account number field (JSON pointer)", false),
+            new Field("api.name.pointer", "Onboarding API", "Customer name field (JSON pointer; Arabic part is used)", false),
+            new Field("api.branch.pointer", "Onboarding API", "Branch code field (JSON pointer)", false),
+            new Field("api.branches.path", "Onboarding API", "getBranches path", false),
+            new Field("api.branches.list.pointer", "Onboarding API", "getBranches list (JSON pointer)", false),
+            new Field("api.branches.code.field", "Onboarding API", "getBranches code field", false),
+            new Field("api.branches.name.field", "Onboarding API", "getBranches English name field", false),
+            new Field("api.auth.header", "Onboarding API", "Auth header name (empty = none)", false),
+            new Field("api.timeout.seconds", "Onboarding API", "Timeout (seconds)", false),
             new Field("sftp.host", "T24 SFTP", "Host / IP", false),
             new Field("sftp.port", "T24 SFTP", "Port", false),
             new Field("sftp.user", "T24 SFTP", "User", false),
@@ -79,15 +80,23 @@ public final class AdminApi {
             new Field("source.sftp.known.hosts", "Onboarding SFTP (images, read only)", "Pinned host key file", false),
             new Field("source.sftp.key.path", "Onboarding SFTP (images, read only)", "Private key file (empty = password)", false),
             new Field("source.sftp.timeout.seconds", "Onboarding SFTP (images, read only)", "Timeout (seconds)", false),
-            new Field("source.selfie.path", "Onboarding SFTP (images, read only)", "Selfie path, e.g. /onboarding/{requestId}/selfie.jpg", false),
-            new Field("source.signature.path", "Onboarding SFTP (images, read only)", "Signature path, e.g. /onboarding/{requestId}/signature.jpg", false),
+            new Field("source.root", "Onboarding SFTP (images, read only)", "Uploads root folder, e.g. /OCR_Uploads", false),
+            new Field("source.folder.pattern", "Onboarding SFTP (images, read only)", "Customer folder under the root ({branch3}, {nationalId}, {accountNumber}; * = anything)", false),
+            new Field("source.selfie.file", "Onboarding SFTP (images, read only)", "Selfie file name without extension (e.g. Profile)", false),
+            new Field("source.signature.file", "Onboarding SFTP (images, read only)", "Signature file name without extension (e.g. SignatureCard)", false),
             new Field("poll.seconds", "Processing", "Delivery cycle (seconds)", false),
             new Field("dispatch.max.attempts", "Processing", "Delivery attempts before giving up", false),
-            new Field("input.stable.seconds", "Processing", "Inbox folder settle time (seconds)", false),
             new Field("jpeg.quality", "Processing", "JPEG quality (0.5 - 1.0)", false),
             new Field("image.max.bytes", "File safety", "Max file size (bytes)", false),
             new Field("image.max.side", "File safety", "Max image side (pixels)", false),
             new Field("image.max.pixels", "File safety", "Max image pixels", false),
+            new Field("api.mode", "Local test mode (production: real / sftp / sftp)", "Onboarding API: real or local", false),
+            new Field("api.local.customers.file", "Local test mode (production: real / sftp / sftp)", "Local customers file (pasted account-details responses)", false),
+            new Field("api.local.branches.file", "Local test mode (production: real / sftp / sftp)", "Local branches file (a pasted getBranches response)", false),
+            new Field("source.mode", "Local test mode (production: real / sftp / sftp)", "Images: sftp or local", false),
+            new Field("source.local.root", "Local test mode (production: real / sftp / sftp)", "Local uploads folder (a copy of OCR_Uploads)", false),
+            new Field("t24.mode", "Local test mode (production: real / sftp / sftp)", "Card delivery: sftp or local", false),
+            new Field("t24.local.dir", "Local test mode (production: real / sftp / sftp)", "Local output folder (stands in for T24)", false),
             new Field("server.bind", "Server (restart needed)", "Listen address", true),
             new Field("server.port", "Server (restart needed)", "Listen port", true));
 
@@ -180,6 +189,9 @@ public final class AdminApi {
         else if (p.equals("/api/archive") && m.equals("GET")) archive(ex);
         else if (p.startsWith("/api/archive/") && p.endsWith(".jpg") && m.equals("GET")) card(ex, p.substring("/api/archive/".length(), p.length() - 4));
         else if (p.equals("/api/archive/export") && m.equals("POST")) export(ex);
+        else if (p.startsWith("/api/archive/") && p.endsWith("/retry") && m.equals("POST")) {
+            retryDelivery(ex, p.substring("/api/archive/".length(), p.length() - "/retry".length()));
+        }
         else if (p.equals("/api/config") && m.equals("GET")) config(ex);
         else if (p.equals("/api/config") && m.equals("PUT")) saveConfig(ex);
         else if (p.equals("/api/quarantine-key") && m.equals("POST")) quarantineKey(ex);
@@ -249,13 +261,20 @@ public final class AdminApi {
         Config cfg = c.cfg();
         ObjectNode out = JSON.createObjectNode();
         out.put("templateId", c.renderer().layout().templateId());
+        out.put("testProfile", cfg.testProfile());
         out.put("endpointEnabled", cfg.server().enabled());
         ObjectNode setup = out.putObject("setup");
         setup.put("onboardingApi", c.lookup().configured());
-        setup.put("t24Sftp", !cfg.sftpHost().isEmpty());
-        setup.put("t24HostKey", Files.isRegularFile(cfg.sftpKnownHosts()));
+        // In LOCAL TEST MODE the SFTP host / key chips don't apply: they count as set.
+        setup.put("t24Sftp", cfg.t24Local() != null || !cfg.sftpHost().isEmpty());
+        setup.put("t24HostKey", cfg.t24Local() != null || Files.isRegularFile(cfg.sftpKnownHosts()));
         setup.put("sourceSftp", cfg.source().configured());
-        setup.put("sourceHostKey", Files.isRegularFile(cfg.source().sftp().knownHosts()));
+        setup.put("sourceHostKey", cfg.source().local() || Files.isRegularFile(cfg.source().sftp().knownHosts()));
+        ObjectNode local = out.putObject("localTestMode");
+        local.put("any", cfg.localTestMode());
+        local.put("api", cfg.api().local() != null);
+        local.put("source", cfg.source().local());
+        local.put("t24", cfg.t24Local() != null);
         setup.put("quarantineKey", c.quarantine() != null);
         setup.put("branchTable", !cfg.api().branches().isEmpty());
         setup.put("secretsStore", secrets.storeAvailable());
@@ -384,7 +403,10 @@ public final class AdminApi {
         Properties p = PropertiesFile.read(service.configFile());
         ObjectNode out = JSON.createObjectNode();
         ArrayNode fields = out.putArray("fields");
+        boolean test = service.current().cfg().testProfile();
+        out.put("testProfile", test);
         for (Field f : FIELDS) {
+            if (!test && isLocalTestField(f.key())) continue; // production: local test settings don't exist
             ObjectNode n = fields.addObject();
             n.put("key", f.key()).put("group", f.group()).put("label", f.label()).put("restart", f.restart());
             n.put("value", p.getProperty(f.key(), Config.DEFAULTS.getOrDefault(f.key(), ""))); // value in effect
@@ -400,7 +422,8 @@ public final class AdminApi {
         JsonNode body = body(ex);
         Map<String, String> settings = new TreeMap<>();
         Set<String> allowed = new java.util.HashSet<>();
-        for (Field f : FIELDS) allowed.add(f.key());
+        boolean test = service.current().cfg().testProfile();
+        for (Field f : FIELDS) if (test || !isLocalTestField(f.key())) allowed.add(f.key());
         body.path("settings").fields().forEachRemaining(e -> {
             if (!allowed.contains(e.getKey())) throw new IllegalArgumentException("setting " + e.getKey() + " can't be changed here");
             settings.put(e.getKey(), e.getValue().asText("").strip());
@@ -460,11 +483,13 @@ public final class AdminApi {
                         StandardCharsets.UTF_8);
                 Config c = Config.load(tmp, secrets);
                 Map<String, String> sample = new HashMap<>();
-                for (String v : List.of("requestId", "nationalId", "passportNumber", "phoneNumber", "accountNumber", "cif")) {
+                for (String v : List.of("requestId", "nationalId", "passportNumber", "phoneNumber", "accountNumber", "branch3")) {
                     sample.put(v, "x");
                 }
-                SourceImages.expand(c.source().selfiePath(), sample);
-                SourceImages.expand(c.source().signaturePath(), sample);
+                String folder = SourceImages.expand(c.source().folderPattern(), sample);
+                if (folder.lastIndexOf('/') >= 0 && folder.substring(0, folder.lastIndexOf('/')).contains("*")) {
+                    return "source.folder.pattern: * is only allowed in the last part (the customer folder name)";
+                }
                 if (c.jpegQuality() < 0.5f || c.jpegQuality() > 1f) return "jpeg.quality must be between 0.5 and 1.0";
                 if (c.pollSeconds() < 1 || c.maxAttempts() < 1) return "poll.seconds and dispatch.max.attempts must be at least 1";
                 Service.build(c);
@@ -503,6 +528,39 @@ public final class AdminApi {
         json(ex, 200, msg("quarantine key generated and applied"));
     }
 
+    private static boolean isLocalTestField(String key) {
+        return key.equals("api.mode") || key.startsWith("api.local.") || key.equals("source.mode")
+                || key.equals("source.local.root") || key.equals("t24.mode") || key.equals("t24.local.dir");
+    }
+
+    /**
+     * Retry a delivery that gave up (status FAILED): the archived card (same bytes, same fingerprint) goes back into
+     * the outbox and its failed copy is cleared. The card on T24 is still never overwritten.
+     */
+    private void retryDelivery(HttpExchange ex, String account) throws IOException {
+        if (!account.matches("\\d{1,30}")) throw new IllegalArgumentException("bad account number");
+        Service.Components c = service.current();
+        Config cfg = c.cfg();
+        if (!"FAILED".equals(Dispatcher.deliveryStatus(cfg, account))) {
+            json(ex, 409, msg("this card's delivery is not FAILED; nothing to retry"));
+            return;
+        }
+        Path card = cfg.archive().resolve(account + ".jpg");
+        if (!Files.exists(card)) {
+            json(ex, 404, msg("no archived card for this account"));
+            return;
+        }
+        Generator.writeAtomically(cfg.outbox().resolve(account + ".jpg"), Files.readAllBytes(card));
+        try (Stream<Path> s = Files.list(cfg.failed())) {
+            for (Path f : s.toList()) {
+                String n = f.getFileName().toString();
+                if (n.endsWith("-" + account + ".jpg") || n.endsWith("-" + account + ".jpg.reason.txt")) Files.delete(f);
+            }
+        }
+        c.audit().log("DELIVERY_RETRY", account, "by=admin");
+        json(ex, 200, msg("queued again for delivery; it goes out with the next delivery cycle"));
+    }
+
     // ---- endpoint switch and branch table -------------------------------------------------------------------------
 
     /** Turns OUR endpoint on or off (saved in application.properties, so it survives a restart). */
@@ -521,24 +579,45 @@ public final class AdminApi {
         return Path.of(p.getProperty("branches.file", Config.DEFAULTS.get("branches.file")).strip());
     }
 
+    /**
+     * One row per branch: the list from getBranches (code + English name) merged with the saved Arabic names,
+     * plus a suggested Arabic name where none is saved. ?refresh=1 fetches the list from the API now.
+     */
     private void branches(HttpExchange ex) throws IOException {
+        Service.Components c = service.current();
+        Map<String, String> saved = c.cfg().api().branches();
+        Map<String, String> fromApi = Map.of();
         ObjectNode out = JSON.createObjectNode();
-        ObjectNode table = out.putObject("branches");
-        service.current().cfg().api().branches().forEach(table::put);
+        try {
+            fromApi = c.lookup().branches("1".equals(query(ex, "refresh")));
+        } catch (IOException | RejectedException e) {
+            out.put("apiError", "getBranches failed: " + e.getMessage() + " (showing saved names only)");
+        }
+        java.util.Set<String> codes = new java.util.TreeSet<>(fromApi.keySet());
+        codes.addAll(saved.keySet());
+        ArrayNode rows = out.putArray("rows");
+        for (String code : codes) {
+            ObjectNode r = rows.addObject().put("code", code);
+            String english = fromApi.get(code);
+            if (english != null) r.put("english", english);
+            r.put("inApi", english != null);
+            if (saved.containsKey(code)) r.put("arabic", saved.get(code));
+            else if (english != null && BranchNames.suggest(english) != null) r.put("suggestion", BranchNames.suggest(english));
+        }
         out.put("file", branchesFile().toString());
         json(ex, 200, out);
     }
 
-    /** Replaces the whole branch-code → branch-name table (previous file backed up). */
+    /** Replaces the saved Arabic names (previous file backed up). An empty name = none saved: the English name is used. */
     private void saveBranches(HttpExchange ex) throws IOException {
         Map<String, String> table = new TreeMap<>();
         body(ex).path("branches").fields().forEachRemaining(e -> {
             String code = e.getKey().strip(), name = e.getValue().asText("").strip();
             if (!code.matches("[A-Za-z0-9_-]{1,30}")) throw new IllegalArgumentException("bad branch code: " + code);
-            if (name.isEmpty() || name.contains("\n") || name.contains("\r") || name.length() > 100) {
-                throw new IllegalArgumentException("branch " + code + " needs a name (one line, up to 100 characters)");
+            if (name.contains("\n") || name.contains("\r") || name.length() > 100) {
+                throw new IllegalArgumentException("branch " + code + ": the name must be one line, up to 100 characters");
             }
-            table.put(code, name);
+            if (!name.isEmpty()) table.put(code, name);
         });
         Path file = branchesFile();
         Path parent = file.toAbsolutePath().getParent();
@@ -567,6 +646,14 @@ public final class AdminApi {
         try {
             switch (target) {
                 case "onboarding-api" -> {
+                    if (cfg.api().local() != null) {
+                        Map<String, String> b = service.current().lookup().branches(true);
+                        if (!Files.isRegularFile(cfg.api().local().customersFile())) {
+                            throw new IOException("customers file not found: " + cfg.api().local().customersFile());
+                        }
+                        out.put("message", "LOCAL test files OK (" + b.size() + " branches); the real API is not called");
+                        break;
+                    }
                     if (cfg.api().baseUrl().isEmpty()) throw new IOException("api.base.url is not set");
                     HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(cfg.api().timeoutSeconds())).build();
                     HttpResponse<Void> r = http.send(HttpRequest.newBuilder(URI.create(cfg.api().baseUrl()))
@@ -575,11 +662,22 @@ public final class AdminApi {
                     out.put("message", "reachable (HTTP " + r.statusCode() + " on the base URL)");
                 }
                 case "t24-sftp" -> {
+                    if (cfg.t24Local() != null) {
+                        Files.createDirectories(cfg.t24Local().dir());
+                        out.put("message", "LOCAL output folder ready: " + cfg.t24Local().dir().toAbsolutePath());
+                        break;
+                    }
                     try (SftpConnection s = SftpConnection.connect(cfg.t24Sftp())) {
                         out.put("message", "logged in; repository folder " + s.describeRemoteDir() + " (nothing uploaded)");
                     }
                 }
                 case "source-sftp" -> {
+                    if (cfg.source().local()) {
+                        Path root = Path.of(cfg.source().localRoot());
+                        if (!Files.isDirectory(root)) throw new IOException("local uploads folder not found: " + root.toAbsolutePath());
+                        out.put("message", "LOCAL uploads folder found: " + root.toAbsolutePath() + " (read only)");
+                        break;
+                    }
                     try (SftpConnection s = SftpConnection.connect(cfg.source().sftp())) {
                         out.put("message", "logged in to the onboarding server (nothing read, written or deleted)");
                     }

@@ -30,7 +30,7 @@ import java.util.Set;
 public final class ImageLoader {
 
     static final int MIN_SHORT_SIDE = 300;
-    private static final Set<String> ALLOWED_FORMATS = Set.of("jpeg", "jpg", "png", "webp");
+    private static final Set<String> ALLOWED_FORMATS = Set.of("jpeg", "jpg", "png", "bmp");
 
     private ImageLoader() {}
 
@@ -51,7 +51,7 @@ public final class ImageLoader {
         try (ImageInputStream header = ImageIO.createImageInputStream(file.toFile())) {
             Iterator<ImageReader> readers = ImageIO.getImageReaders(header);
             if (!readers.hasNext()) {
-                throw new SuspiciousFileException(file, "not a JPEG, PNG or WebP image (HEIC is not supported)");
+                throw new SuspiciousFileException(file, "not a JPEG, PNG or BMP image");
             }
             ImageReader reader = readers.next();
             try {

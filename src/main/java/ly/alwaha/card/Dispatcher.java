@@ -29,7 +29,7 @@ public final class Dispatcher {
     public void dispatchOutbox() throws IOException {
         List<Path> cards = pending();
         if (cards.isEmpty()) return;
-        try (SftpConnection up = SftpConnection.connect(cfg.t24Sftp())) {
+        try (CardTarget up = cfg.t24Local() != null ? LocalFolders.target(cfg.t24Local().dir()) : SftpConnection.connect(cfg.t24Sftp())) {
             for (Path card : cards) send(up, card);
         } catch (IOException | RuntimeException e) {
             // Couldn't connect, or the session dropped: every card still in the outbox counts one attempt.
@@ -37,7 +37,7 @@ public final class Dispatcher {
         }
     }
 
-    private void send(SftpConnection up, Path card) throws IOException {
+    private void send(CardTarget up, Path card) throws IOException {
         String name = card.getFileName().toString();
         String account = name.substring(0, name.length() - ".jpg".length());
         byte[] data = Files.readAllBytes(card);
@@ -63,7 +63,6 @@ public final class Dispatcher {
         int attempts = (Files.exists(counter) ? Integer.parseInt(Files.readString(counter).trim()) : 0) + 1;
         String reason = e.getClass().getSimpleName() + ": " + e.getMessage();
         if (attempts >= cfg.maxAttempts()) {
-            Files.deleteIfExists(counter);
             moveToFailed(card, "gave up after " + attempts + " attempts; last error " + reason);
             audit.log("FAILED", account, "attempts=" + attempts + " reason=\"" + reason + "\"");
         } else {
@@ -96,6 +95,7 @@ public final class Dispatcher {
     }
 
     private void moveToFailed(Path card, String reason) throws IOException {
+        Files.deleteIfExists(attemptsFile(card)); // a retry from the dashboard starts counting again
         Files.createDirectories(cfg.failed());
         String stamp = LocalDateTime.now().format(STAMP);
         Path target = cfg.failed().resolve(stamp + "-" + card.getFileName());

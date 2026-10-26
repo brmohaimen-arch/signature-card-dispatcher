@@ -1,0 +1,22 @@
+[
+  {
+    "_comment": "LOCAL TEST MODE only (api.mode=local). FAKE data. Copy to config/test-customers.json. 'response' = an account-details response exactly as the onboarding API returns it (you can paste one from Postman, with fake values).",
+    "nationalId": "119900112233",
+    "passportNumber": "PA1234567",
+    "phoneNumber": "0912345678",
+    "response": {
+      "header": { "status": "success" },
+      "body": [
+        {
+          "product": "Current Account LCY",
+          "accountNumber": "101234567890123",
+          "accountName": "MOHAMMED ALI ABDULLAH ALWARFALLI محمد علي عبدالله الورفلي",
+          "customerID": "1012345",
+          "currency": "LYD",
+          "branch": "LY0010002",
+          "status": "ACTIVE"
+        }
+      ]
+    }
+  }
+]

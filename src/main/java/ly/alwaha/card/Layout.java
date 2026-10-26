@@ -18,7 +18,8 @@ public record Layout(
         TextBox accountName,
         List<Box> accountNumberBoxes,
         TextBox branch,
-        List<Slot> signatureSlots) {
+        List<Slot> signatureSlots,
+        Box authorizedSignature) {   // where the digital print goes; optional
 
     public record Box(int x, int y, int w, int h) {}
 

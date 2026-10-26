@@ -14,15 +14,14 @@ import java.util.Properties;
  * come from the environment or from the encrypted config/secrets.enc (see Secrets).
  */
 public record Config(
+        boolean testProfile,
         Path workDir,
         Path templateDir,
         Path fontRegular,
         Path fontBold,
         int pollSeconds,
-        int stableSeconds,
         int maxAttempts,
         float jpegQuality,
-        boolean allowPlaceholderTemplate,
         String sftpHost,
         int sftpPort,
         String sftpUser,
@@ -36,27 +35,62 @@ public record Config(
         ImageLimits limits,
         String quarantineKey,
         Source source,
-        Server server) {
+        Server server,
+        LocalTarget t24Local) {
+
+    /** True if any side runs in LOCAL TEST MODE (shown as a banner in the dashboard). */
+    public boolean localTestMode() {
+        return localTestMode(api, source, t24Local);
+    }
+
+    private static boolean localTestMode(Api api, Source source, LocalTarget t24Local) {
+        return (api != null && api.local() != null) || (source != null && source.local()) || t24Local != null;
+    }
 
     /**
-     * The onboarding API lookup: identity → account details (account number, name, branch code).
-     * Optional get-CIF call (off by default): CIF = first cifDigits of the account; name + branch then come from it.
-     * The branch code is turned into the branch name with the branch table (config/branches.properties).
-     * Response fields are picked with JSON pointers so they can follow the real response shape without code changes.
+     * profile=production (default) refuses every local mode, so production can never be switched to test folders/files.
+     * profile=test allows them; the dashboard then shows a permanent TEST PROFILE banner.
+     */
+    public Config {
+        if (!testProfile && localTestMode(api, source, t24Local)) {
+            throw new IllegalArgumentException("profile=production does not allow local test modes "
+                    + "(api.mode / source.mode / t24.mode must be real / sftp / sftp); use a separate profile=test config");
+        }
+    }
+
+    /**
+     * The onboarding API:
+     *   account details by identity → account number, name, branch code
+     *   getBranches                 → every branch's code (companyId) and English name (displayName)
+     * The card's branch name is the Arabic name saved in the branch table (config/branches.properties);
+     * if a branch has none yet, the English name from getBranches is used.
+     * Response fields are picked with JSON pointers / field names so they follow the real response without code changes.
      */
     public record Api(
             String baseUrl,
             String accountPath,
-            boolean cifEnabled,
-            String cifPath,
             String accountNumberPointer,
             String fullNamePointer,
             String branchPointer,
-            int cifDigits,
+            String branchesPath,
+            String branchesListPointer,
+            String branchCodeField,
+            String branchNameField,
             String authHeader,
             String authValue,
             int timeoutSeconds,
-            Map<String, String> branches) {}
+            Map<String, String> branches,
+            LocalApi local) {}
+
+    /**
+     * LOCAL TEST MODE for the onboarding API (api.mode=local): answers come from two files instead of the network.
+     * customersFile: [{"nationalId","passportNumber","phoneNumber","response": <a pasted account-details response>}]
+     * branchesFile:  a pasted getBranches response. null = real API (api.mode=real).
+     */
+    public record LocalApi(Path customersFile, Path branchesFile) {}
+
+    /** LOCAL TEST MODE for delivery (t24.mode=local): cards go to this folder instead of the T24 SFTP. null = SFTP. */
+    public record LocalTarget(Path dir) {}
 
     /** Checked from the file size and image header before any pixels are decoded. */
     public record ImageLimits(long maxBytes, int maxSide, long maxPixels) {}
@@ -66,13 +100,27 @@ public record Config(
                                Path keyPath, String password, String keyPassphrase, int timeoutSeconds) {}
 
     /**
-     * The onboarding SFTP the selfie and signature are READ from (never written or deleted).
-     * Paths may use {requestId} {nationalId} {passportNumber} {phoneNumber} {accountNumber} {cif}.
-     * Left empty until the bank gives the real layout; the endpoint then answers "not configured yet".
+     * The onboarding SFTP the selfie and signature are READ from (never written or deleted). The app's layout:
+     *   {root}/{branch3}/{nationalId}_{accountNumber}_{trace number}[_OpenNewBankAccount]/Profile.bmp, SignatureCard.bmp, …
+     * folderPattern (under root) may use {branch3} (last 3 characters of the branch code), {nationalId},
+     * {accountNumber}, {passportNumber}, {phoneNumber}, {requestId}, and * as a wildcard in its LAST part.
+     * If several folders match, the newest is used. selfieFile / signatureFile are base names (any extension).
      */
-    public record Source(SftpEndpoint sftp, String selfiePath, String signaturePath) {
+    public record Source(SftpEndpoint sftp, String root, String folderPattern, String selfieFile, String signatureFile,
+                         String localRoot) {
+        /** LOCAL TEST MODE (source.mode=local): read from the local folder localRoot instead of the SFTP. */
+        public boolean local() {
+            return localRoot != null;
+        }
+
+        /** The uploads root actually used: the local folder in test mode, otherwise the SFTP path. */
+        public String effectiveRoot() {
+            return local() ? localRoot : root;
+        }
+
         public boolean configured() {
-            return !sftp.host().isEmpty() && !selfiePath.isEmpty() && !signaturePath.isEmpty();
+            return (local() ? !localRoot.isEmpty() : !sftp.host().isEmpty() && !root.isEmpty())
+                    && !folderPattern.isEmpty() && !selfieFile.isEmpty() && !signatureFile.isEmpty();
         }
     }
 
@@ -83,17 +131,25 @@ public record Config(
     public static final Map<String, String> DEFAULTS = Map.ofEntries(
             Map.entry("api.base.url", ""),
             Map.entry("api.account.path", "/irf-itss-container/api/v1.0.0/holdings/customer/account/details/{nationalId}/{passportNumber}/{phoneNumber}"),
-            Map.entry("api.cif.enabled", "false"),
-            Map.entry("api.cif.path", ""),
             Map.entry("api.account.number.pointer", "/body/0/accountNumber"),
             Map.entry("api.name.pointer", "/body/0/accountName"),
             Map.entry("api.branch.pointer", "/body/0/branch"),
-            Map.entry("api.cif.digits", "7"),
+            Map.entry("api.branches.path", "/irf-itss-container/api/v1.0.0/holdings/getBranches"),
+            Map.entry("api.branches.list.pointer", "/body"),
+            Map.entry("api.branches.code.field", "companyId"),
+            Map.entry("api.branches.name.field", "displayName"),
             Map.entry("api.auth.header", ""),
             Map.entry("api.timeout.seconds", "45"),
             Map.entry("branches.file", "config/branches.properties"),
             Map.entry("endpoint.enabled", "true"),
-            Map.entry("image.max.bytes", "15000000"),
+            Map.entry("api.mode", "real"),
+            Map.entry("api.local.customers.file", "config/test-customers.json"),
+            Map.entry("api.local.branches.file", "config/test-branches.json"),
+            Map.entry("source.mode", "sftp"),
+            Map.entry("source.local.root", ""),
+            Map.entry("t24.mode", "sftp"),
+            Map.entry("t24.local.dir", ""),
+            Map.entry("image.max.bytes", "40000000"),
             Map.entry("image.max.side", "10000"),
             Map.entry("image.max.pixels", "50000000"),
             Map.entry("source.sftp.host", ""),
@@ -102,17 +158,18 @@ public record Config(
             Map.entry("source.sftp.known.hosts", "config/source_known_hosts"),
             Map.entry("source.sftp.key.path", ""),
             Map.entry("source.sftp.timeout.seconds", "30"),
-            Map.entry("source.selfie.path", ""),
-            Map.entry("source.signature.path", ""),
+            Map.entry("source.root", ""),
+            Map.entry("source.folder.pattern", "{branch3}/{nationalId}_{accountNumber}_*"),
+            Map.entry("source.selfie.file", "Profile"),
+            Map.entry("source.signature.file", "SignatureCard"),
             Map.entry("work.dir", "work"),
             Map.entry("template.dir", "templates/BM-AC008-2026"),
             Map.entry("font.regular", "fonts/Almarai-Regular.ttf"),
             Map.entry("font.bold", "fonts/Almarai-Bold.ttf"),
             Map.entry("poll.seconds", "30"),
-            Map.entry("input.stable.seconds", "10"),
             Map.entry("dispatch.max.attempts", "5"),
             Map.entry("jpeg.quality", "0.95"),
-            Map.entry("allow.placeholder.template", "false"),
+            Map.entry("profile", "production"),
             Map.entry("sftp.host", ""),
             Map.entry("sftp.port", "22"),
             Map.entry("sftp.user", ""),
@@ -141,16 +198,21 @@ public record Config(
         Api api = new Api(
                 p.getProperty("api.base.url").trim(),
                 p.getProperty("api.account.path").trim(),
-                bool(p, "api.cif.enabled"),
-                p.getProperty("api.cif.path").trim(),
                 p.getProperty("api.account.number.pointer").trim(),
                 p.getProperty("api.name.pointer").trim(),
                 p.getProperty("api.branch.pointer").trim(),
-                Integer.parseInt(p.getProperty("api.cif.digits")),
+                p.getProperty("api.branches.path").trim(),
+                p.getProperty("api.branches.list.pointer").trim(),
+                p.getProperty("api.branches.code.field").trim(),
+                p.getProperty("api.branches.name.field").trim(),
                 p.getProperty("api.auth.header").trim(),
                 secrets.get("API_AUTH_VALUE"),
                 Integer.parseInt(p.getProperty("api.timeout.seconds")),
-                loadBranches(Path.of(p.getProperty("branches.file").trim())));
+                loadBranches(Path.of(p.getProperty("branches.file").trim())),
+                mode(p, "api.mode", "real")
+                        ? null
+                        : new LocalApi(Path.of(p.getProperty("api.local.customers.file").trim()),
+                                       Path.of(p.getProperty("api.local.branches.file").trim())));
         ImageLimits limits = new ImageLimits(
                 Long.parseLong(p.getProperty("image.max.bytes")),
                 Integer.parseInt(p.getProperty("image.max.side")),
@@ -166,18 +228,24 @@ public record Config(
                         secrets.get("SOURCE_SFTP_PASSWORD"),
                         secrets.get("SOURCE_SFTP_KEY_PASSPHRASE"),
                         Integer.parseInt(p.getProperty("source.sftp.timeout.seconds"))),
-                p.getProperty("source.selfie.path").trim(),
-                p.getProperty("source.signature.path").trim());
+                p.getProperty("source.root").trim(),
+                p.getProperty("source.folder.pattern").trim(),
+                p.getProperty("source.selfie.file").trim(),
+                p.getProperty("source.signature.file").trim(),
+                mode(p, "source.mode", "sftp") ? null : p.getProperty("source.local.root").trim());
+        String profile = p.getProperty("profile").trim();
+        if (!profile.equals("production") && !profile.equals("test")) {
+            throw new IllegalArgumentException("profile must be production or test");
+        }
         return new Config(
+                profile.equals("test"),
                 Path.of(p.getProperty("work.dir")),
                 Path.of(p.getProperty("template.dir")),
                 Path.of(p.getProperty("font.regular")),
                 Path.of(p.getProperty("font.bold")),
                 Integer.parseInt(p.getProperty("poll.seconds")),
-                Integer.parseInt(p.getProperty("input.stable.seconds")),
                 Integer.parseInt(p.getProperty("dispatch.max.attempts")),
                 Float.parseFloat(p.getProperty("jpeg.quality")),
-                Boolean.parseBoolean(p.getProperty("allow.placeholder.template")),
                 p.getProperty("sftp.host").trim(),
                 Integer.parseInt(p.getProperty("sftp.port")),
                 p.getProperty("sftp.user").trim(),
@@ -193,7 +261,16 @@ public record Config(
                 source,
                 new Server(p.getProperty("server.bind").trim(),
                         Integer.parseInt(p.getProperty("server.port")),
-                        bool(p, "endpoint.enabled")));
+                        bool(p, "endpoint.enabled")),
+                mode(p, "t24.mode", "sftp") ? null : new LocalTarget(Path.of(p.getProperty("t24.local.dir").trim())));
+    }
+
+    /** true = the production value (real / sftp), false = local; anything else is refused. */
+    private static boolean mode(Properties p, String key, String production) {
+        String v = p.getProperty(key).trim();
+        if (v.equals(production)) return true;
+        if (v.equals("local")) return false;
+        throw new IllegalArgumentException(key + " must be " + production + " or local");
     }
 
     private static boolean bool(Properties p, String key) {
@@ -224,10 +301,8 @@ public record Config(
         return s.isBlank() ? null : Path.of(s.trim());
     }
 
-    public Path inbox()      { return workDir.resolve("inbox"); }
     public Path staging()    { return workDir.resolve("staging"); }
     public Path requests()   { return workDir.resolve("requests"); }
-    public Path processed()  { return workDir.resolve("processed"); }
     public Path outbox()     { return workDir.resolve("outbox"); }
     public Path archive()    { return workDir.resolve("archive"); }
     public Path failed()     { return workDir.resolve("failed"); }

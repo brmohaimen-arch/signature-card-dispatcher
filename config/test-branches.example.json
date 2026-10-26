@@ -1,0 +1,9 @@
+{
+  "_comment": "LOCAL TEST MODE only (api.mode=local). Copy to config/test-branches.json. Same shape as the getBranches response (you can paste the real one).",
+  "header": { "status": "success", "total_size": 3 },
+  "body": [
+    { "companyId": "LY0010001", "displayName": "AlWaha Bank", "languageId": 1, "mnemonic": "BNK" },
+    { "companyId": "LY0010002", "displayName": "Sooq Eljoma Branch", "languageId": 1, "mnemonic": "SOQ" },
+    { "companyId": "LY0010003", "displayName": "Zliten Branch", "languageId": 1, "mnemonic": "ZLT" }
+  ]
+}

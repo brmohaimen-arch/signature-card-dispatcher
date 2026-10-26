@@ -199,5 +199,11 @@
       },
       "signaturePadding": 18
     }
-  ]
+  ],
+  "authorizedSignature": {
+    "x": 239,
+    "y": 2176,
+    "w": 405,
+    "h": 224
+  }
 }

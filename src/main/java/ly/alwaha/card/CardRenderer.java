@@ -46,7 +46,16 @@ public final class CardRenderer {
 
     public BufferedImage template() { return template; }
 
+    /** The visible digital print in the Authorized Signature box: when the card was made and by which request. */
+    public record DigitalPrint(java.util.UUID requestId, java.time.ZonedDateTime at) {}
+
+    /** Without a digital print (previews and tests). */
     public BufferedImage render(CardData data, BufferedImage selfie, BufferedImage signature) throws RejectedException {
+        return render(data, selfie, signature, null);
+    }
+
+    public BufferedImage render(CardData data, BufferedImage selfie, BufferedImage signature, DigitalPrint print)
+            throws RejectedException {
         data.validate(layout.accountNumberBoxes().size());
         BufferedImage card = copy(template);
         Graphics2D g = card.createGraphics();
@@ -60,6 +69,7 @@ public final class CardRenderer {
             for (Slot slot : layout.signatureSlots()) {
                 drawText(g, "fullName", data.fullName(), slot.fullName(), regular);
             }
+            if (print != null && layout.authorizedSignature() != null) drawDigitalPrint(g, print, layout.authorizedSignature());
         } finally {
             g.dispose();
         }
@@ -109,6 +119,33 @@ public final class CardRenderer {
         g.setClip(new RoundRectangle2D.Double(b.x(), b.y(), b.w(), b.h(), 2.0 * r, 2.0 * r));
         g.drawImage(scaled, b.x() + (b.w() - tw) / 2, b.y() + (b.h() - th) / 2, null);
         g.setClip(oldClip);
+    }
+
+    /**
+     * Four centred lines inside the box: a label, the date/time (Tripoli) and the request UUID split in two halves
+     * (36 characters on one line would be too small to read). The UUID is also in the JPEG metadata.
+     */
+    private void drawDigitalPrint(Graphics2D g, DigitalPrint p, Box b) {
+        String id = p.requestId().toString();
+        String[] lines = {
+                "توقيع رقمي · Digital onboarding",
+                p.at().withZoneSameInstant(java.time.ZoneId.of("Africa/Tripoli"))
+                        .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")) + " (Tripoli)",
+                "Ref " + id.substring(0, 18),
+                id.substring(18)};
+        int pad = 14;
+        float lineHeight = (b.h() - 2f * pad) / lines.length;
+        g.setColor(INK);
+        for (int i = 0; i < lines.length; i++) {
+            Font f = (i == 0 ? bold : regular).deriveFont(Math.min(lineHeight * 0.62f, 34f));
+            TextLayout tl = new TextLayout(lines[i], f, g.getFontRenderContext());
+            while (tl.getAdvance() > b.w() - 2 * pad && f.getSize2D() > 10f) {
+                f = f.deriveFont(f.getSize2D() - 1f);
+                tl = new TextLayout(lines[i], f, g.getFontRenderContext());
+            }
+            float baseline = b.y() + pad + lineHeight * i + (lineHeight + tl.getAscent() - tl.getDescent()) / 2f;
+            tl.draw(g, b.x() + (b.w() - tl.getAdvance()) / 2f, baseline);
+        }
     }
 
     private static void drawTick(Graphics2D g, Box b) {

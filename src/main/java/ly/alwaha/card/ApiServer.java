@@ -162,6 +162,10 @@ public final class ApiServer implements AutoCloseable {
                 return entry(id, 503, "NOT_CONFIGURED", null, "image source not configured yet", null);
             }
 
+            String branchCode = data.branchCode() == null ? "" : data.branchCode();
+            if (!branchCode.matches("[A-Za-z0-9]{3,30}")) {
+                throw new RejectedException("branch code from the onboarding API can't be used to find the customer's folder");
+            }
             Path staging = cfg.staging().resolve(id);
             try {
                 // Identity values were validated by the lookup (letters/digits only), so they're safe in paths.
@@ -171,7 +175,11 @@ public final class ApiServer implements AutoCloseable {
                         "passportNumber", identity.passportNumber().strip(),
                         "phoneNumber", identity.phoneNumber().strip(),
                         "accountNumber", account,
-                        "cif", account.substring(0, cfg.api().cifDigits())), staging);
+                        "branch3", branchCode.substring(branchCode.length() - 3)), staging);
+                if (files.matchingFolders() > 1) {
+                    // Only the count: folder names contain the national ID and account number.
+                    audit.log("SOURCE_MULTIPLE_FOLDERS", account, "request=" + id + " count=" + files.matchingFolders() + " used=newest");
+                }
                 Generator.Result r = generator.generateCard(id, requestId, data, files.selfie(), files.signature());
                 return r.existing()
                         ? entry(id, 200, "EXISTS", account, "this account already has a card", r)

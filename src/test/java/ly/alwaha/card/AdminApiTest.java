@@ -40,6 +40,7 @@ class AdminApiTest {
     Service service;
     ApiServer server;
     SshServer sshd;
+    StubOnboardingApi onboardingApi;
     Path sftpRoot;
     final HttpClient http = HttpClient.newHttpClient();
     final ObjectMapper json = new ObjectMapper();
@@ -57,6 +58,7 @@ class AdminApiTest {
         sshd.setSubsystemFactories(List.of(new SftpSubsystemFactory()));
         sshd.setFileSystemFactory(new VirtualFileSystemFactory(sftpRoot));
         sshd.start();
+        onboardingApi = new StubOnboardingApi();
 
         Path configDir = Files.createDirectories(tmp.resolve("config"));
         configFile = configDir.resolve("application.properties");
@@ -67,7 +69,7 @@ class AdminApiTest {
                 "template.dir=" + fwd(template),
                 "font.regular=" + fwd(TestSupport.project().resolve("fonts/Almarai-Regular.ttf")),
                 "font.bold=" + fwd(TestSupport.project().resolve("fonts/Almarai-Bold.ttf")),
-                "allow.placeholder.template=true",
+                "api.base.url=" + onboardingApi.baseUrl(),
                 "# T24 SFTP",
                 "sftp.host=127.0.0.1",
                 "sftp.port=" + sshd.getPort(),
@@ -75,8 +77,7 @@ class AdminApiTest {
                 "sftp.remote.dir=repo",
                 "sftp.known.hosts=" + fwd(configDir.resolve("known_hosts")),
                 "branches.file=" + fwd(configDir.resolve("branches.properties")),
-                "source.selfie.path=",
-                "source.signature.path=",
+                "source.root=",
                 "server.bind=127.0.0.1",
                 "server.port=0",
                 ""), StandardCharsets.UTF_8);
@@ -91,6 +92,7 @@ class AdminApiTest {
     void stop() throws Exception {
         server.close();
         sshd.stop(true);
+        onboardingApi.close();
     }
 
     private static String fwd(Path p) {
@@ -172,17 +174,17 @@ class AdminApiTest {
     void savingConfigKeepsCommentsMakesABackupAndAppliesWithoutRestart() throws Exception {
         login();
         HttpResponse<byte[]> r = putConfig("{\"source.sftp.host\":\"127.0.0.1\","
-                + "\"source.selfie.path\":\"/onboarding/{requestId}/selfie.jpg\","
-                + "\"source.signature.path\":\"/onboarding/{requestId}/signature.png\"}", "{}");
+                + "\"source.root\":\"/OCR_Uploads\"}", "{}");
         assertEquals(200, r.statusCode(), new String(r.body()));
 
         String file = Files.readString(configFile);
-        assertTrue(file.contains("source.selfie.path=/onboarding/{requestId}/selfie.jpg"));
+        assertTrue(file.contains("source.root=/OCR_Uploads"));
         assertTrue(file.contains("# Signature Card Dispatcher settings (test)"), "comments kept");
         try (Stream<Path> s = Files.list(configFile.getParent().resolve("backups"))) {
             assertEquals(1, s.count(), "previous version backed up");
         }
-        assertEquals("/onboarding/{requestId}/selfie.jpg", service.current().cfg().source().selfiePath(), "applied live");
+        assertEquals("/OCR_Uploads", service.current().cfg().source().root(), "applied live");
+        assertTrue(service.current().cfg().source().configured(), "host + root + default pattern = configured");
         assertTrue(Files.readString(service.current().cfg().archive().resolve("dispatch.log")).contains("CONFIG_CHANGED"));
     }
 
@@ -190,7 +192,8 @@ class AdminApiTest {
     void invalidConfigIsRefusedAndNothingIsWritten() throws Exception {
         login();
         byte[] before = Files.readAllBytes(configFile);
-        assertEquals(400, putConfig("{\"source.selfie.path\":\"/x/{bogus}/selfie.jpg\"}", "{}").statusCode());
+        assertEquals(400, putConfig("{\"source.folder.pattern\":\"{branch3}/{bogus}_*\"}", "{}").statusCode());
+        assertEquals(400, putConfig("{\"source.folder.pattern\":\"*/{nationalId}_*\"}", "{}").statusCode(), "* only in the last part");
         assertEquals(400, putConfig("{\"sftp.port\":\"abc\"}", "{}").statusCode());
         assertEquals(400, putConfig("{\"api.base.url\":\"not a url\"}", "{}").statusCode());
         assertEquals(400, putConfig("{\"work.dir\":\"/elsewhere\"}", "{}").statusCode(), "not editable from the dashboard");
@@ -244,19 +247,30 @@ class AdminApiTest {
     }
 
     @Test
-    void branchTableIsSavedWithArabicNamesAndApplied() throws Exception {
+    void branchListComesFromGetBranchesWithSuggestionsUntilArabicIsSaved() throws Exception {
         login();
-        String arabic = "فرع طرابلس الرئيسي";
+        JsonNode got = body(call("GET", "/admin/api/branches?refresh=1", null));
+        assertFalse(got.has("apiError"), got.toString());
+        Map<String, JsonNode> rows = new HashMap<>();
+        got.path("rows").forEach(r -> rows.put(r.path("code").asText(), r));
+        assertEquals(4, rows.size(), "every branch from getBranches");
+        assertEquals(TestSupport.BRANCH_ENGLISH, rows.get(TestSupport.BRANCH_CODE).path("english").asText());
+        assertEquals("فرع سوق الجمعة", rows.get(TestSupport.BRANCH_CODE).path("suggestion").asText(), "pre-filled suggestion");
+        assertFalse(rows.get(TestSupport.BRANCH_CODE).has("arabic"), "a suggestion is not saved by itself");
+        assertFalse(rows.get("LY0010009").has("suggestion"), "unknown place: no guess");
+
+        String checked = "فرع سوق الجمعة";
         HttpResponse<byte[]> r = call("PUT", "/admin/api/branches",
-                "{\"branches\":{\"LY0010002\":\"" + arabic + "\",\"LY0010003\":\"فرع بنغازي\"}}");
+                "{\"branches\":{\"" + TestSupport.BRANCH_CODE + "\":\"" + checked + "\",\"LY0010009\":\"\"}}");
         assertEquals(200, r.statusCode(), new String(r.body(), StandardCharsets.UTF_8));
-        assertEquals(arabic, service.current().cfg().api().branches().get("LY0010002"), "applied live");
-        JsonNode got = body(call("GET", "/admin/api/branches", null));
-        assertEquals(arabic, got.path("branches").path("LY0010002").asText());
-        assertEquals(2, got.path("branches").size());
+        assertEquals(Map.of(TestSupport.BRANCH_CODE, checked), service.current().cfg().api().branches(),
+                "saved and applied; an empty name means none saved (English is printed)");
+        JsonNode after = body(call("GET", "/admin/api/branches", null));
+        after.path("rows").forEach(row -> {
+            if (row.path("code").asText().equals(TestSupport.BRANCH_CODE)) assertEquals(checked, row.path("arabic").asText());
+        });
         assertEquals(400, call("PUT", "/admin/api/branches", "{\"branches\":{\"bad code!\":\"x\"}}").statusCode());
-        assertEquals(400, call("PUT", "/admin/api/branches", "{\"branches\":{\"LY1\":\"\"}}").statusCode());
-        assertEquals(2, service.current().cfg().api().branches().size(), "a bad save changes nothing");
+        assertEquals(1, service.current().cfg().api().branches().size(), "a bad save changes nothing");
     }
 
     // ---- archive ------------------------------------------------------------------------------------------------
@@ -292,6 +306,45 @@ class AdminApiTest {
         String log = Files.readString(service.current().cfg().archive().resolve("dispatch.log"));
         assertTrue(log.contains("CARD_DOWNLOADED") && log.contains("ARCHIVE_EXPORTED"));
         assertEquals(400, call("GET", "/admin/api/archive/..%2Fsecrets.jpg", null).statusCode());
+    }
+
+    @Test
+    void failedDeliveryCanBeRetriedFromTheArchiveOnce() throws Exception {
+        Config cfg = service.current().cfg();
+        byte[] card = "fake-jpeg-bytes".getBytes(StandardCharsets.US_ASCII);
+        Files.write(Files.createDirectories(cfg.archive()).resolve(TestSupport.ACCOUNT + ".jpg"), card);
+        Path failed = Files.createDirectories(cfg.failed()).resolve("20261026-093000-" + TestSupport.ACCOUNT + ".jpg");
+        Files.write(failed, card);
+        Files.writeString(failed.resolveSibling(failed.getFileName() + ".reason.txt"), "gave up");
+        login();
+        assertEquals("FAILED", Dispatcher.deliveryStatus(cfg, TestSupport.ACCOUNT));
+
+        assertEquals(200, call("POST", "/admin/api/archive/" + TestSupport.ACCOUNT + "/retry", null).statusCode());
+        assertArrayEquals(card, Files.readAllBytes(cfg.outbox().resolve(TestSupport.ACCOUNT + ".jpg")), "same archived bytes");
+        try (Stream<Path> f = Files.list(cfg.failed())) {
+            assertEquals(0, f.count(), "failed copy and reason cleared");
+        }
+        assertEquals("PENDING", Dispatcher.deliveryStatus(cfg, TestSupport.ACCOUNT));
+        assertTrue(Files.readString(cfg.archive().resolve("dispatch.log")).contains("DELIVERY_RETRY"));
+
+        assertEquals(409, call("POST", "/admin/api/archive/" + TestSupport.ACCOUNT + "/retry", null).statusCode(), "only FAILED");
+        assertEquals(400, call("POST", "/admin/api/archive/..%2Fx/retry", null).statusCode());
+    }
+
+    // ---- production profile ---------------------------------------------------------------------------------------
+
+    @Test
+    void productionDashboardHasNoLocalTestSettings() throws Exception {
+        login();
+        JsonNode cfg = body(call("GET", "/admin/api/config", null));
+        assertFalse(cfg.path("testProfile").asBoolean());
+        for (JsonNode f : cfg.path("fields")) {
+            String key = f.path("key").asText();
+            assertFalse(key.endsWith(".mode") || key.contains(".local."), "hidden in production: " + key);
+        }
+        assertEquals(400, putConfig("{\"api.mode\":\"local\"}", "{}").statusCode());
+        assertEquals(400, putConfig("{\"t24.local.dir\":\"/tmp/x\"}", "{}").statusCode());
+        assertFalse(body(call("GET", "/admin/api/overview", null)).path("testProfile").asBoolean());
     }
 
     // ---- host keys + connection check -----------------------------------------------------------------------------

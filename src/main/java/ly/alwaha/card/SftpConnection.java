@@ -22,9 +22,7 @@ import java.time.Duration;
  * One SFTP connection: to the T24 document repository (upload) or the onboarding server (read only).
  * The host key must already be in known_hosts. Unknown or changed keys are rejected; there's no "accept all".
  */
-public final class SftpConnection implements Closeable {
-
-    public enum Outcome { DELIVERED, ALREADY_PRESENT, REMOTE_DIFFERS }
+public final class SftpConnection implements SourceFiles, CardTarget {
 
     private final SshClient client;
     private final ClientSession session;
@@ -100,6 +98,24 @@ public final class SftpConnection implements Closeable {
             if (e.getStatus() == SftpConstants.SSH_FX_NO_SUCH_FILE) return -1;
             throw e;
         }
+    }
+
+    /** Read-only listing of a remote folder (metadata only); an empty list if it doesn't exist. */
+    public java.util.List<Entry> list(String dir) throws IOException {
+        java.util.List<Entry> out = new java.util.ArrayList<>();
+        try {
+            for (SftpClient.DirEntry e : sftp.readDir(dir)) {
+                String name = e.getFilename();
+                if (name.equals(".") || name.equals("..")) continue;
+                SftpClient.Attributes a = e.getAttributes();
+                java.time.Instant modified = a.getModifyTime() == null ? java.time.Instant.EPOCH : a.getModifyTime().toInstant();
+                out.add(new Entry(name, a.isDirectory(), modified));
+            }
+        } catch (SftpException ex) {
+            if (ex.getStatus() == SftpConstants.SSH_FX_NO_SUCH_FILE) return out;
+            throw ex;
+        }
+        return out;
     }
 
     /** Read-only stream of a remote file. The caller closes it. */

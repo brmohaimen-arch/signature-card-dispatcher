@@ -68,6 +68,22 @@ class CardRendererTest {
     }
 
     @Test
+    void digitalPrintIsDrawnOnlyInsideTheAuthorizedSignatureBox() throws Exception {
+        CardData d = new CardData(TestSupport.NAME, TestSupport.BRANCH, TestSupport.ACCOUNT);
+        Box box = renderer.layout().authorizedSignature();
+        assertNotNull(box, "layout.json has the authorizedSignature box");
+        BufferedImage plain = renderer.render(d, TestSupport.selfie(), TestSupport.signature());
+        BufferedImage printed = renderer.render(d, TestSupport.selfie(), TestSupport.signature(),
+                new CardRenderer.DigitalPrint(java.util.UUID.randomUUID(),
+                        java.time.ZonedDateTime.parse("2026-10-26T09:30:00Z")));
+        assertTrue(darkPixels(printed, box) > darkPixels(plain, box) + 500, "print text in the box");
+        for (Box slot : List.of(renderer.layout().photo(), renderer.layout().signatureSlots().get(0).signature())) {
+            assertEquals(darkPixels(plain, slot), darkPixels(printed, slot), "nothing drawn outside the box");
+        }
+        Files.write(Path.of("target/sample-card-digital-print.jpg"), JpegWriter.write(printed, 0.95f, 300));
+    }
+
+    @Test
     void signatureAppearsInAllFourSlotsWithoutStretching() throws Exception {
         BufferedImage card = renderer.render(new CardData(TestSupport.NAME, TestSupport.BRANCH, TestSupport.ACCOUNT),
                 TestSupport.selfie(), TestSupport.signature());
@@ -134,7 +150,7 @@ class CardRendererTest {
         List<Box> swapped = new ArrayList<>(l.accountNumberBoxes());
         Collections.swap(swapped, 0, 1);
         Layout bad = new Layout(l.templateId(), l.width(), l.height(), l.dpi(), l.photo(), l.photoCornerRadius(),
-                l.individualCheckbox(), l.accountName(), swapped, l.branch(), l.signatureSlots());
+                l.individualCheckbox(), l.accountName(), swapped, l.branch(), l.signatureSlots(), l.authorizedSignature());
         new ObjectMapper().writeValue(dir.resolve("layout.json").toFile(), bad);
         IllegalStateException e = assertThrows(IllegalStateException.class, () -> Layout.load(dir.resolve("layout.json")));
         assertTrue(e.getMessage().contains("left to right"));

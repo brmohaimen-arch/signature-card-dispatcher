@@ -18,3 +18,8 @@ id_*
 # JVM crash reports
 hs_err_pid*.log
 replay_pid*.log
+
+# Local test data (may contain real responses) and local test folders
+config/test-customers.json
+config/test-branches.json
+local-test/

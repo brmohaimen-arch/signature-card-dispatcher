@@ -50,9 +50,8 @@ class ApiServerTest {
     void start() throws Exception {
         sftpRoot = Files.createDirectories(tmp.resolve("sftp-root"));
         t24Repo = Files.createDirectories(sftpRoot.resolve("repo"));
-        sourceDir = Files.createDirectories(sftpRoot.resolve("onboarding").resolve(TestSupport.NID));
-        ImageIO.write(TestSupport.selfie(), "jpg", sourceDir.resolve("selfie.jpg").toFile());
-        ImageIO.write(TestSupport.signature(), "png", sourceDir.resolve("signature.png").toFile());
+        // The app's real layout: OCR_Uploads/{branch3}/{nationalId}_{accountNumber}_{traceNumber}/*.bmp
+        sourceDir = customerFolder("002", TestSupport.NID + "_" + TestSupport.ACCOUNT + "_c07a5154");
 
         sshd = SshServer.setUpDefaultServer();
         sshd.setHost("127.0.0.1");
@@ -72,8 +71,8 @@ class ApiServerTest {
         Config base = TestSupport.config(tmp, TestSupport.templateDir(tmp), "127.0.0.1", sshd.getPort(), knownHosts, "repo", onboardingApi.config());
         Config.Source source = new Config.Source(
                 new Config.SftpEndpoint("127.0.0.1", sshd.getPort(), "t24", "", knownHosts, null, "secret", null, 10),
-                "/onboarding/{nationalId}/selfie.jpg", "/onboarding/{nationalId}/signature.png");
-        cfg = withSource(base, source);
+                "/OCR_Uploads", Config.DEFAULTS.get("source.folder.pattern"), "Profile", "SignatureCard", null);
+        cfg = TestSupport.withSource(base, source);
         startApi(cfg);
     }
 
@@ -130,12 +129,15 @@ class ApiServerTest {
         }
     }
 
-    private static Config withSource(Config c, Config.Source s) {
-        return new Config(c.workDir(), c.templateDir(), c.fontRegular(), c.fontBold(), c.pollSeconds(), c.stableSeconds(),
-                c.maxAttempts(), c.jpegQuality(), c.allowPlaceholderTemplate(), c.sftpHost(), c.sftpPort(), c.sftpUser(),
-                c.sftpRemoteDir(), c.sftpKnownHosts(), c.sftpKeyPath(), c.sftpPassword(), c.sftpKeyPassphrase(),
-                c.sftpTimeoutSeconds(), c.api(), c.limits(), c.quarantineKey(), s, c.server());
+    /** A customer folder like the app writes: Profile.bmp, SignatureCard.bmp and a Passport.bmp we must ignore. */
+    private Path customerFolder(String branch3, String name) throws Exception {
+        Path dir = Files.createDirectories(sftpRoot.resolve("OCR_Uploads").resolve(branch3).resolve(name));
+        ImageIO.write(TestSupport.selfie(), "bmp", dir.resolve("Profile.bmp").toFile());
+        ImageIO.write(TestSupport.signature(), "bmp", dir.resolve("SignatureCard.bmp").toFile());
+        Files.writeString(dir.resolve("Passport.bmp"), "not used");
+        return dir;
     }
+
 
     // ---- the happy path ---------------------------------------------------------------------------------------
 
@@ -160,7 +162,7 @@ class ApiServerTest {
         assertNotNull(ImageIO.read(delivered.toFile()), "still a valid JPEG");
 
         assertEquals("DELIVERED", body(get(uuid)).get("delivery").asText());
-        assertTrue(Files.exists(sourceDir.resolve("selfie.jpg")) && Files.exists(sourceDir.resolve("signature.png")),
+        assertTrue(Files.exists(sourceDir.resolve("Profile.bmp")) && Files.exists(sourceDir.resolve("SignatureCard.bmp")),
                 "files on the onboarding server are never deleted");
         assertEquals(0, count(cfg.staging()), "our staging copies are cleaned up");
         assertEquals(1, count(t24Repo), "only the card goes to T24, never the raw images");
@@ -242,11 +244,7 @@ class ApiServerTest {
     @Test
     void disabledEndpointAnswers503AndStoresNothing() throws Exception {
         Config.Server off = new Config.Server(cfg.server().bind(), cfg.server().port(), false);
-        Config c = cfg;
-        startApi(new Config(c.workDir(), c.templateDir(), c.fontRegular(), c.fontBold(), c.pollSeconds(), c.stableSeconds(),
-                c.maxAttempts(), c.jpegQuality(), c.allowPlaceholderTemplate(), c.sftpHost(), c.sftpPort(), c.sftpUser(),
-                c.sftpRemoteDir(), c.sftpKnownHosts(), c.sftpKeyPath(), c.sftpPassword(), c.sftpKeyPassphrase(),
-                c.sftpTimeoutSeconds(), c.api(), c.limits(), c.quarantineKey(), c.source(), off));
+        startApi(TestSupport.withServer(cfg, off));
         String uuid = UUID.randomUUID().toString();
 
         HttpResponse<String> r = submit(uuid);
@@ -257,10 +255,44 @@ class ApiServerTest {
         assertEquals(404, get(uuid).statusCode(), "not stored: the same UUID works once re-enabled");
     }
 
+    // ---- finding the customer's folder in OCR_Uploads -----------------------------------------------------------
+
+    @Test
+    void newestMatchingFolderIsUsedWhenThereAreSeveral() throws Exception {
+        // An older copy whose selfie is broken: if it were picked, the request would come back SUSPICIOUS.
+        Path older = customerFolder("002", TestSupport.NID + "_" + TestSupport.ACCOUNT + "_c07a5154_OpenNewBankAccount (2)");
+        Files.writeString(older.resolve("Profile.bmp"), "broken");
+        Files.setLastModifiedTime(older, java.nio.file.attribute.FileTime.fromMillis(System.currentTimeMillis() - 86_400_000L));
+        Files.setLastModifiedTime(sourceDir, java.nio.file.attribute.FileTime.fromMillis(System.currentTimeMillis()));
+
+        HttpResponse<String> r = submit(UUID.randomUUID().toString());
+
+        assertEquals(202, r.statusCode(), r.body());
+        String log = Files.readString(cfg.archive().resolve("dispatch.log"));
+        assertTrue(log.contains("SOURCE_MULTIPLE_FOLDERS") && log.contains("count=2"), log);
+        assertFalse(log.contains(TestSupport.NID), "folder names (with the national ID) are never logged");
+    }
+
+    @Test
+    void theEightCharacterCodeCanBeAnything() throws Exception {
+        Files.move(sourceDir, sourceDir.resolveSibling(TestSupport.NID + "_" + TestSupport.ACCOUNT + "_9f3e21ab"));
+        assertEquals(202, submit(UUID.randomUUID().toString()).statusCode());
+    }
+
+    @Test
+    void folderInAnotherBranchIsNotFoundAndIsTemporary() throws Exception {
+        Path other = Files.createDirectories(sftpRoot.resolve("OCR_Uploads").resolve("018"));
+        Files.move(sourceDir, other.resolve(sourceDir.getFileName()));
+        String uuid = UUID.randomUUID().toString();
+        HttpResponse<String> r = submit(uuid);
+        assertEquals(503, r.statusCode(), r.body());
+        assertEquals(404, get(uuid).statusCode(), "not stored: the app can retry once the folder is there");
+    }
+
     @Test
     void notConfiguredSourceAnswers503AndIsNotStored() throws Exception {
-        startApi(withSource(cfg, new Config.Source(
-                new Config.SftpEndpoint("", 22, "", "", cfg.sftpKnownHosts(), null, null, null, 10), "", "")));
+        startApi(TestSupport.withSource(cfg, new Config.Source(
+                new Config.SftpEndpoint("", 22, "", "", cfg.sftpKnownHosts(), null, null, null, 10), "", "", "", "", null)));
         String uuid = UUID.randomUUID().toString();
         HttpResponse<String> r = submit(uuid);
         assertEquals(503, r.statusCode());
@@ -272,19 +304,19 @@ class ApiServerTest {
     void suspiciousRemoteFileIsQuarantinedAndTheirsLeftAlone() throws Exception {
         byte[] big = new byte[6_000_000]; // test limit is 5 MB
         big[0] = 7;
-        Files.write(sourceDir.resolve("selfie.jpg"), big);
+        Files.write(sourceDir.resolve("Profile.bmp"), big);
         String uuid = UUID.randomUUID().toString();
 
         HttpResponse<String> r = submit(uuid);
 
         assertEquals(422, r.statusCode(), r.body());
         assertEquals("SUSPICIOUS", body(r).get("status").asText());
-        Path enc = cfg.quarantine().resolve(uuid + "-selfie.jpg.enc");
+        Path enc = cfg.quarantine().resolve(uuid + "-selfie.bmp.enc");
         assertTrue(Files.exists(enc), "encrypted into quarantine");
         Path back = tmp.resolve("back");
         new Quarantine(cfg.quarantine(), cfg.quarantineKey()).decrypt(enc, back);
         assertArrayEquals(big, Files.readAllBytes(back));
-        assertTrue(Files.exists(sourceDir.resolve("selfie.jpg")), "their file is not deleted");
+        assertTrue(Files.exists(sourceDir.resolve("Profile.bmp")), "their file is not deleted");
         assertEquals(0, count(cfg.staging()), "no copy of ours left");
         assertEquals(0, count(cfg.outbox()), "no card made");
         assertEquals("SUSPICIOUS", body(submit(uuid)).get("status").asText(), "stored: replay gives the same answer");
@@ -314,7 +346,7 @@ class ApiServerTest {
 
     @Test
     void imageNotOnTheServerYetIs503() throws Exception {
-        Files.delete(sourceDir.resolve("signature.png"));
+        Files.delete(sourceDir.resolve("SignatureCard.bmp"));
         HttpResponse<String> r = submit(UUID.randomUUID().toString());
         assertEquals(503, r.statusCode(), r.body());
     }

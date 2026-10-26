@@ -34,7 +34,7 @@ public final class Service {
         Quarantine quarantine = cfg.quarantineKey() == null || cfg.quarantineKey().isBlank()
                 ? null : new Quarantine(cfg.quarantine(), cfg.quarantineKey());
         return new Components(cfg, renderer, audit, lookup, quarantine,
-                new Generator(cfg, renderer, audit, lookup, quarantine),
+                new Generator(cfg, renderer, audit, quarantine),
                 new Dispatcher(cfg, audit),
                 new SourceImages(cfg.source(), cfg.limits(), quarantine),
                 new RequestStore(cfg.requests()));
